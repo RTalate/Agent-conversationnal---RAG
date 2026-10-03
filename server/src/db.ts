@@ -34,6 +34,11 @@ if (readOnlyPool === pool) {
 
 const READ_ONLY_STATEMENT_TIMEOUT_MS = 10_000;
 
+// Waits for in-flight queries, then closes every connection.
+export const closeDb = async () => {
+  await Promise.all([pool.end(), readOnlyPool !== pool ? readOnlyPool.end() : undefined]);
+};
+
 export const initializeTables = async () => {
   await query(`
     CREATE TABLE IF NOT EXISTS TABLE_SCHEMA (
@@ -67,15 +72,15 @@ export async function withTransaction<T>(work: (client: PoolClient) => Promise<T
 //  2. extended query protocol: PostgreSQL rejects anything that is not a single statement,
 //     so "SELECT 1; COMMIT; DROP TABLE x" cannot escape the transaction below;
 //  3. READ ONLY transaction: the database refuses any write, whatever the SQL says;
-//  4. statement timeout, so a runaway query cannot hold the connection.
+//  4. statement timeout (10 seconds by default), so a runaway query cannot hold the connection.
 // The transaction is always rolled back.
-export async function queryReadOnly(sql: string) {
+export async function queryReadOnly(sql: string, timeoutMs: number = READ_ONLY_STATEMENT_TIMEOUT_MS) {
   assertSelectQuery(sql);
   const client = await readOnlyPool.connect();
   let broken = false;
   try {
     await client.query("BEGIN READ ONLY");
-    await client.query(`SET LOCAL statement_timeout = ${READ_ONLY_STATEMENT_TIMEOUT_MS}`);
+    await client.query(`SET LOCAL statement_timeout = ${Math.floor(timeoutMs)}`);
     // queryMode is supported by pg >= 8.13 but missing from the installed @types/pg.
     return await client.query({ text: sql, queryMode: "extended" } as QueryConfig);
   } finally {

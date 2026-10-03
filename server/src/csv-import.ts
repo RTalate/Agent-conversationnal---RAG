@@ -3,7 +3,7 @@ import { parse } from 'csv-parse';
 import { withTransaction } from './db';
 import { InvalidInputError, quoteIdent } from './sql-safety';
 
-type ColumnType = 'INTEGER' | 'BIGINT' | 'NUMERIC' | 'TIMESTAMP' | 'TEXT';
+export type ColumnType = 'INTEGER' | 'BIGINT' | 'NUMERIC' | 'TIMESTAMP' | 'TEXT';
 
 const RESERVED_KEYWORDS = ['user', 'group', 'order', 'select', 'where', 'from', 'table', 'column'];
 // PostgreSQL truncates identifiers at 63 characters; keep room for a de-duplication suffix.
@@ -28,7 +28,7 @@ function normalizeColumnName(column: string): string {
 }
 
 // Turns CSV headers into valid, unique, lowercase column names.
-function buildColumnNames(header: string[]): string[] {
+export function buildColumnNames(header: string[]): string[] {
   const used = new Set<string>();
   return header.map((raw, index) => {
     let name = normalizeColumnName(raw).slice(0, MAX_COLUMN_NAME_LENGTH);
@@ -47,21 +47,22 @@ function buildColumnNames(header: string[]): string[] {
 const INTEGER_PATTERN = /^-?(0|[1-9]\d*)$/; // no leading zeros: "007" is an identifier, not a number
 const DECIMAL_PATTERN = /^-?\d*\.\d+$/;
 const TIMESTAMP_PATTERN =
-  /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?$/;
+  /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-](\d{2})(?::?(\d{2}))?)?)?$/;
 
 // Date.parse() is too lenient ("2021-02-31" rolls over to March); PostgreSQL rejects it.
 function isTimestamp(value: string): boolean {
   const match = TIMESTAMP_PATTERN.exec(value);
   if (!match) return false;
   // Optional groups (time of day) are undefined for a date-only value: treat them as 0.
-  const [year, month, day, hour, minute, second] = match.slice(1).map(group => Number(group ?? 0));
+  const [year, month, day, hour, minute, second, offsetHour, offsetMinute] = match.slice(1).map(group => Number(group ?? 0));
   const date = new Date(Date.UTC(year, month - 1, day));
   return year >= 1 &&
     date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day &&
-    hour <= 23 && minute <= 59 && second <= 59;
+    hour <= 23 && minute <= 59 && second <= 59 &&
+    offsetHour <= 15 && offsetMinute <= 59; // PostgreSQL accepts UTC offsets up to +/-15:59
 }
 
-function classifyValue(value: string): ColumnType {
+export function classifyValue(value: string): ColumnType {
   if (INTEGER_PATTERN.test(value)) {
     const digits = value.replace('-', '').length;
     if (digits <= 9) return 'INTEGER';
@@ -76,7 +77,7 @@ function classifyValue(value: string): ColumnType {
 const NUMERIC_RANK: Partial<Record<ColumnType, number>> = { INTEGER: 0, BIGINT: 1, NUMERIC: 2 };
 
 // Smallest type that holds both: numbers widen (INTEGER < BIGINT < NUMERIC), anything else is TEXT.
-function mergeTypes(current: ColumnType | undefined, next: ColumnType): ColumnType {
+export function mergeTypes(current: ColumnType | undefined, next: ColumnType): ColumnType {
   if (current === undefined || current === next) return next;
   const currentRank = NUMERIC_RANK[current];
   const nextRank = NUMERIC_RANK[next];

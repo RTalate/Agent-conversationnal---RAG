@@ -165,6 +165,27 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO sqlgen_reado
 
 Not covered: authentication, CORS, rate limiting and cleanup of uploaded files. The query results sent to OpenAI are not filtered either.
 
+## Tests
+
+**Server** (`cd server`, Node 22 or later):
+
+| Command | What it runs | Needs |
+|---|---|---|
+| `npm run test:unit` | Pure functions: table-name and SQL guards, CSV type inference, parsing of AI answers | nothing |
+| `npm run test:integration` | The real routes, SQL and AI pipeline: uploads and SQL injection, read-only guard, dedicated role, `/query` | PostgreSQL |
+| `npm test` | Both | PostgreSQL |
+| `npm run typecheck` | Type-checks `src` and `test` | nothing |
+
+Integration tests never call OpenAI: the application talks to a local fake (`server/test/helpers/fake-openai.ts`), so
+they need no API key and cost nothing. Each test file creates its own throwaway database (`sqlgen_test_*`) and drops it
+afterwards; `DB_NAME` is never used. They connect with `DB_HOST`, `DB_PORT`, `DB_USER` and `DB_PASSWORD` (from the
+environment or `server/.env`), and that user must be allowed to create databases and roles (a superuser such as
+`postgres` is). Set `TEST_VERBOSE=1` to see the application logs. If a run is killed, the databases it
+created (`sqlgen_test_*`) and roles (`sqlgen_ro_*`) may remain: drop them by hand.
+
+**UI** (`cd ui`): `npm test` runs the component tests (Vitest and Testing Library, with the API replaced by a fake
+`fetch`); `npm run test:watch` re-runs them as you edit.
+
 ## Contributing
 
 This is a proof of concept and is not intended for production use. This repository is for educational purposes and will not be maintained. Please feel free to fork and maintain your own version!
