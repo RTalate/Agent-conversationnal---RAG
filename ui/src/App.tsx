@@ -4,6 +4,24 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+
+// Browsers report CSV files with different MIME types (e.g. application/vnd.ms-excel on Windows),
+// so the extension is the reliable check.
+const isCsvFile = (file: File | undefined): file is File =>
+  !!file && file.name.toLowerCase().endsWith('.csv');
+
+// The API answers errors as { error: string }
+async function readError(response: Response, fallback: string): Promise<string> {
+  try {
+    const data = await response.json();
+    if (typeof data?.error === 'string') return data.error;
+  } catch {
+    // not JSON: use the fallback
+  }
+  return fallback;
+}
+
 function App() {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -11,19 +29,27 @@ function App() {
   const [query, setQuery] = useState('');
   const [queryResponse, setQueryResponse] = useState<string | null>(null);
   const [isQuerying, setIsQuerying] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const [queryError, setQueryError] = useState<string | null>(null);
 
   const onDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile?.type === "text/csv") {
+    if (isCsvFile(droppedFile)) {
       setFile(droppedFile);
+      setUploadStatus(null);
+    } else {
+      setUploadStatus({ ok: false, text: 'Please choose a .csv file.' });
     }
   }, []);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
-    if (selectedFile?.type === "text/csv") {
+    if (isCsvFile(selectedFile)) {
       setFile(selectedFile);
+      setUploadStatus(null);
+    } else if (selectedFile) {
+      setUploadStatus({ ok: false, text: 'Please choose a .csv file.' });
     }
   };
 
@@ -31,22 +57,26 @@ function App() {
     if (!file || !tableName) return;
 
     setUploading(true);
+    setUploadStatus(null);
     const formData = new FormData();
     formData.append('file', file);
     formData.append('tableName', tableName);
 
     try {
-      const response = await fetch('http://localhost:3000/upload-csv', {
+      const response = await fetch(`${API_URL}/upload-csv`, {
         method: 'POST',
         body: formData,
       });
 
-      if (!response.ok) throw new Error('Upload failed');
-      
+      if (!response.ok) throw new Error(await readError(response, 'Upload failed'));
+
+      const data = await response.json();
+      setUploadStatus({ ok: true, text: `Imported ${data.columnCount} columns into table "${data.tableName}".` });
       setFile(null);
       setTableName('');
     } catch (error) {
       console.error('Upload error:', error);
+      setUploadStatus({ ok: false, text: error instanceof Error ? error.message : 'Upload failed' });
     } finally {
       setUploading(false);
     }
@@ -56,8 +86,10 @@ function App() {
     if (!query) return;
     
     setIsQuerying(true);
+    setQueryError(null);
+    setQueryResponse(null);
     try {
-      const response = await fetch('http://localhost:3000/query', {
+      const response = await fetch(`${API_URL}/query`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -65,12 +97,13 @@ function App() {
         body: JSON.stringify({ message: query }),
       });
 
-      if (!response.ok) throw new Error('Query failed');
+      if (!response.ok) throw new Error(await readError(response, 'Query failed'));
       
       const data = await response.json();
       setQueryResponse(data.response);
     } catch (error) {
       console.error('Query error:', error);
+      setQueryError(error instanceof Error ? error.message : 'Query failed');
     } finally {
       setIsQuerying(false);
     }
@@ -114,6 +147,15 @@ function App() {
                 {file ? file.name : 'Drag and drop a CSV file here, or click to select'}
               </Label>
             </div>
+
+            {uploadStatus && (
+              <p
+                role={uploadStatus.ok ? 'status' : 'alert'}
+                className={`mt-4 text-sm ${uploadStatus.ok ? 'text-green-600' : 'text-red-600'}`}
+              >
+                {uploadStatus.text}
+              </p>
+            )}
           </CardContent>
           <CardFooter>
             <Button 
@@ -144,6 +186,7 @@ function App() {
               />
               <Button 
                 onClick={handleQuery}
+                disabled={!query || isQuerying}
               >
                 Ask
               </Button>
@@ -153,6 +196,10 @@ function App() {
               <div className="mt-4">
                 <Skeleton className="h-20 w-full" />
               </div>
+            )}
+
+            {queryError && !isQuerying && (
+              <p role="alert" className="mt-4 text-sm text-red-600">{queryError}</p>
             )}
 
             {queryResponse && !isQuerying && (

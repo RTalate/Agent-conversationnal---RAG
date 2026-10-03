@@ -74,6 +74,9 @@ PORT=3000
 OPENAI_API_KEY=your_openai_api_key
 ```
 
+   Optional variables: `OPENAI_MODEL` (defaults to `gpt-4o-mini`) and `DB_READONLY_USER` / `DB_READONLY_PASSWORD`
+   (see [Security notes](#security-notes)).
+
 3. Start the development servers:
 
 # Frontend
@@ -81,6 +84,7 @@ OPENAI_API_KEY=your_openai_api_key
 cd ui
 npm run dev
 ```
+The UI calls the API at `http://localhost:3000` by default. Set `VITE_API_URL` to use another address.
 
 # Backend
 ```
@@ -111,18 +115,20 @@ npm run dev
 
 ## Example Usage
 
-1. Upload a CSV file:
+1. Upload a CSV file (a sample is provided in `data/customers-1000.csv`):
    ```
    Drag and drop your CSV file into the upload area
-   Enter a table name for your data
+   Enter a table name for your data (letters, digits and underscores; stored in lowercase)
    Click "Upload CSV"
    ```
+   Uploading again under the same name replaces the table, but only if this application created it.
+   A table that already exists for another reason is never overwritten.
 
 2. Query your data:
    ```
-   "Show me the total sales by region for last month"
-   "What was the average order value per customer?"
-   "Which products had the highest growth rate?"
+   "How many customers are there in each country?"
+   "Which companies have more than one customer?"
+   "How many customers subscribed in 2021?"
    ```
 
 ## Technical Details
@@ -134,6 +140,51 @@ The application uses a sophisticated prompt engineering approach to generate acc
 - PostgreSQL-specific query generation with best practices
 - Multi-step validation to ensure accurate responses
 - Error recovery with context-aware query regeneration
+
+## Security notes
+
+This is a proof of concept, but two protections are in place because they are cheap and the failure mode is data loss:
+
+- **Table names** are validated (`^[a-z_][a-z0-9_]{0,62}$` after lowercasing) and always quoted. The internal
+  `table_schema` table and `pg_*` names are reserved.
+- **SQL written by the AI** only runs if it is a single `SELECT`/`WITH` statement, inside a `READ ONLY` transaction that is
+  always rolled back, with a 10 second statement timeout.
+
+`READ ONLY` stops writes, not reads. If `DB_USER` is a superuser (as in the sample configuration), AI-generated SQL can still
+call functions such as `pg_read_file`. To close that, create a role that can only read and set `DB_READONLY_USER` /
+`DB_READONLY_PASSWORD`; run this as `DB_USER`, in the application database:
+
+```sql
+CREATE ROLE sqlgen_readonly LOGIN PASSWORD 'change_me';
+GRANT CONNECT ON DATABASE sqlgen TO sqlgen_readonly;
+GRANT USAGE ON SCHEMA public TO sqlgen_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO sqlgen_readonly;
+-- tables created by later uploads
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO sqlgen_readonly;
+```
+
+Not covered: authentication, CORS, rate limiting and cleanup of uploaded files. The query results sent to OpenAI are not filtered either.
+
+## Tests
+
+**Server** (`cd server`, Node 22 or later):
+
+| Command | What it runs | Needs |
+|---|---|---|
+| `npm run test:unit` | Pure functions: table-name and SQL guards, CSV type inference, parsing of AI answers | nothing |
+| `npm run test:integration` | The real routes, SQL and AI pipeline: uploads and SQL injection, read-only guard, dedicated role, `/query` | PostgreSQL |
+| `npm test` | Both | PostgreSQL |
+| `npm run typecheck` | Type-checks `src` and `test` | nothing |
+
+Integration tests never call OpenAI: the application talks to a local fake (`server/test/helpers/fake-openai.ts`), so
+they need no API key and cost nothing. Each test file creates its own throwaway database (`sqlgen_test_*`) and drops it
+afterwards; `DB_NAME` is never used. They connect with `DB_HOST`, `DB_PORT`, `DB_USER` and `DB_PASSWORD` (from the
+environment or `server/.env`), and that user must be allowed to create databases and roles (a superuser such as
+`postgres` is). Set `TEST_VERBOSE=1` to see the application logs. If a run is killed, the databases it
+created (`sqlgen_test_*`) and roles (`sqlgen_ro_*`) may remain: drop them by hand.
+
+**UI** (`cd ui`): `npm test` runs the component tests (Vitest and Testing Library, with the API replaced by a fake
+`fetch`); `npm run test:watch` re-runs them as you edit.
 
 ## Contributing
 
