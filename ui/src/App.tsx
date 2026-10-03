@@ -45,6 +45,9 @@ function App() {
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
+    // Browsers fire no change event when the same file is picked twice in a row, which would
+    // make it impossible to upload a file again after a successful upload.
+    e.target.value = '';
     if (isCsvFile(selectedFile)) {
       setFile(selectedFile);
       setUploadStatus(null);

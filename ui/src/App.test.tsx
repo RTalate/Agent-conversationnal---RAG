@@ -187,6 +187,16 @@ describe('upload', () => {
     expect(uploadButton()).toBeEnabled()
   })
 
+  it('clears the file input once the file is read, so the same file can be chosen again', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.upload(fileInput(), csvFile())
+
+    expect(screen.getByText('customers.csv')).toBeInTheDocument()
+    expect(fileInput().files).toHaveLength(0)
+  })
+
   it('clears the previous message when a new file is chosen', async () => {
     const user = userEvent.setup({ applyAccept: false })
     render(<App />)
