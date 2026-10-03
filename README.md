@@ -44,6 +44,21 @@ The table analyzer component performs intelligent data profiling:
 - Creates AI-powered descriptions of each field
 - Provides context for more accurate query generation
 
+## Quick start with `make`
+
+`make` (GNU Make; on Windows, use WSL or Git Bash) drives everything. Run `make` to list the commands.
+
+```
+cp server/.env.sample server/.env   # then set OPENAI_API_KEY
+make db-up                          # optional: PostgreSQL in Docker, matching .env.sample
+make dev                            # API on :3000 and UI on :5173; Ctrl-C stops both
+make verify                         # type-check, lint, build, then every test
+```
+
+Dependencies are installed the first time they are needed. Without Docker, point `DB_HOST`, `DB_PORT`, `DB_USER` and
+`DB_PASSWORD` (in `server/.env`) to your own PostgreSQL. `make test` runs every suite even if one fails, so a missing
+database does not hide a failing UI test; the integration tests need PostgreSQL (see [Tests](#tests)).
+
 ## Setup
 
 1. Install dependencies:
