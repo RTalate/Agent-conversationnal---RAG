@@ -1,5 +1,6 @@
 import { query } from './db';
-import { queryAI } from './query-ai';
+import { queryAI, parseAIJson } from './query-ai';
+import { quoteIdent } from './sql-safety';
 
 export async function analyzeTable(
   tableName: string,
@@ -9,8 +10,8 @@ export async function analyzeTable(
   try {
     // Get table info and sample data
     const sampleQuery = `
-      SELECT * FROM "${tableName}" 
-      ORDER BY RANDOM() 
+      SELECT * FROM ${quoteIdent(tableName)}
+      ORDER BY RANDOM()
       LIMIT ${sampleSize}
     `;
     const result = await query(sampleQuery);
@@ -28,7 +29,8 @@ export async function analyzeTable(
         type: getHumanReadableType(columnType),
         distinctCount: distinctValues.size,
         nullCount,
-        nullPercentage: (nullCount / sampleSize) * 100,
+        // relative to the rows actually sampled, which is fewer than sampleSize for small tables
+        nullPercentage: columnData.length ? (nullCount / columnData.length) * 100 : 0,
       };
 
       if (distinctValues.size <= maxDistinctValues) {
@@ -81,7 +83,7 @@ ${JSON.stringify(dataDictionary, null, 2)}
 Format your response as a JSON object where keys are field names and values are descriptions.`;
 
   const response = await queryAI(systemPrompt, userPrompt, true);
-  return JSON.parse(response);
+  return parseAIJson<Record<string, string>>(response, 'table analysis');
 }
 
 function getHumanReadableType(typeId: number | undefined): string {

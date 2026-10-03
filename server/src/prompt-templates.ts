@@ -103,7 +103,7 @@ Question that needs to be answered: ${userQuery}`,
   }),
 
   formatAnswer: (question: string, sqlQuery: string, queryResults: any[]) => ({
-    system: `You are the AskVolo assistant, a database expert that explains query results in clear, natural language.
+    system: `You are a database assistant, an expert that explains query results in clear, natural language.
 Provide a concise answer that directly addresses the user's question based on the query results.
 Respond in JSON format matching this schema:
 {
