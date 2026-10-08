@@ -1,210 +1,301 @@
 # AI SQL Query Generator
 
-A demonstration application showcasing Query RAG (Retrieval-Augmented Generation) capabilities with AI-powered SQL query generation. This application allows users to upload CSV files, automatically analyze their contents, and use natural language to query the data through an AI workflow.
+Application de démonstration du « Query RAG » : vous importez un fichier CSV, l'application le charge dans PostgreSQL et
+l'analyse, puis vous l'interrogez en langage naturel. Une IA (OpenAI) écrit la requête SQL, l'exécute et vous répond.
 
-You can watch the full video here:
+Vidéo d'explication :
 
 [![Learn about Query RAG](https://img.youtube.com/vi/5LIfSpr3GDM/0.jpg)](https://youtu.be/5LIfSpr3GDM)
 > 🎥 How to build advanced RAG systems with AI-generated SQL
 
-## Features
+**Sommaire** : [Démarrage rapide](#démarrage-rapide) · [Variantes](#variantes) · [Utiliser l'interface](#utiliser-linterface) ·
+[Dépannage](#dépannage) · [Commandes](#commandes-make) · [Configuration](#configuration) ·
+[Fonctionnement](#fonctionnement) · [Sécurité](#sécurité) · [Tests](#tests)
 
-- 📤 CSV file upload with drag-and-drop support
-- 📊 Automatic schema detection and PostgreSQL table creation
-- 🤖 AI-powered natural language to SQL conversion
-- 🔍 Smart query analysis and validation
-- 💡 Intelligent error handling and query regeneration
-- 🎯 Context-aware responses based on available data
+---
 
-## Architecture
+## Démarrage rapide
+
+Objectif : de zéro à l'interface qui répond à vos questions, en 6 étapes. Toutes les commandes se tapent dans un
+terminal Linux, macOS ou WSL (voir [Windows](#windows)).
+
+### 0. Ce qu'il faut avoir
+
+| Outil | Vérification | Installation |
+|---|---|---|
+| Git | `git --version` | [git-scm.com](https://git-scm.com) |
+| Node.js 22 (LTS) | `node -v` affiche `v22.x` | [nodejs.org](https://nodejs.org) |
+| Docker avec Compose v2 | `docker compose version` | [docker.com](https://www.docker.com/products/docker-desktop/) (Docker Desktop doit être **lancé**) |
+| GNU Make | `make --version` | macOS : `xcode-select --install` · Linux : `sudo apt install make` |
+| Une clé API OpenAI **avec du crédit** | — | [platform.openai.com](https://platform.openai.com) → *API keys* |
+
+Pas de Docker sur cette machine ? Voir [PostgreSQL déjà installé](#postgresql-déjà-installé-sans-docker).
+Pas de `make` ? Voir [Sans make](#sans-make).
+
+Chaque import de CSV et chaque question appellent l'API OpenAI, qui est payante (modèle `gpt-4o-mini` par défaut).
+
+### 1. Récupérer le code
+
+```bash
+git clone https://github.com/RTalate/Agent-conversationnal---RAG.git
+cd Agent-conversationnal---RAG
+```
+
+Le dépôt est public : aucun identifiant n'est demandé.
+
+### 2. Renseigner votre clé OpenAI
+
+```bash
+cp server/.env.sample server/.env
+```
+
+Ouvrez `server/.env` et remplacez la valeur de `OPENAI_API_KEY` par votre clé. **Ne changez rien d'autre** : les autres
+valeurs correspondent déjà à la base de l'étape suivante.
+
+```env
+OPENAI_API_KEY=sk-...votre-clé...
+```
+
+### 3. Démarrer la base de données
+
+```bash
+make db-up
+```
+
+La commande rend la main quand PostgreSQL est prêt (au premier lancement, Docker télécharge d'abord l'image).
+
+### 4. Lancer l'application
+
+```bash
+make dev
+```
+
+Au premier lancement, les dépendances sont installées (environ une minute). Vous devez ensuite voir
+`Server running on port 3000` (l'API) et l'adresse `http://localhost:5173/` (l'interface). Laissez ce terminal ouvert.
+
+### 5. Essayer l'interface
+
+Ouvrez **http://localhost:5173** dans votre navigateur.
+
+1. Dans **Table Name**, saisissez `customers`.
+2. Glissez-déposez le fichier `data/customers-1000.csv` (fourni dans le dépôt) dans la zone en pointillés, ou cliquez
+   dessus pour le choisir.
+3. Cliquez sur **Upload CSV**. Au bout de quelques secondes, un message vert doit apparaître :
+   `Imported 12 columns into table "customers".`
+4. Dans **Ask about your data**, posez une question puis cliquez sur **Ask**, par exemple :
+   - `How many customers are there in each country?`
+   - `Which companies have more than one customer?`
+   - `How many customers subscribed in 2021?`
+
+La réponse s'affiche en quelques secondes (plusieurs appels à OpenAI sont enchaînés).
+
+### 6. Arrêter
+
+- Dans le terminal de `make dev` : **Ctrl-C** (arrête l'API et l'interface).
+- Puis `make db-down` pour arrêter la base. Vos tables sont conservées : la prochaine fois, relancez simplement
+  `make db-up` puis `make dev`. Pour tout effacer, utilisez `make db-reset`.
+
+### Vérifier l'installation (facultatif)
+
+Avec la base démarrée (`make db-up`), cette commande vérifie les types, le lint, la compilation puis lance tous les tests :
+
+```bash
+make verify
+```
+
+---
+
+## Variantes
+
+### Windows
+
+`make` et le script de lancement demandent un shell Unix : utilisez **WSL2** (Ubuntu) et installez Docker Desktop avec
+l'option « WSL integration ». Exécutez ensuite toutes les commandes ci-dessus dans le terminal Ubuntu.
+Sans WSL, passez par [Sans make](#sans-make).
+
+### Sans make
+
+Trois terminaux, depuis la racine du dépôt :
+
+```bash
+docker compose up -d --wait db      # 1. la base (si `--wait` n'est pas reconnu : `docker compose up -d db`, puis attendez ~10 s)
+cd server && npm ci && npm run dev  # 2. l'API
+cd ui && npm ci && npm run dev      # 3. l'interface
+```
+
+### PostgreSQL déjà installé (sans Docker)
+
+Sautez l'étape 3 (`make db-up`). Créez une base et indiquez ses paramètres dans `server/.env` :
+
+```bash
+psql -U postgres -c "CREATE DATABASE sqlgen;"
+```
+
+Adaptez ensuite `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` et `DB_NAME` dans `server/.env` à votre installation, puis
+passez à l'étape 4.
+
+---
+
+## Utiliser l'interface
+
+**Importer un CSV**
+- La première ligne doit contenir les noms de colonnes ; le séparateur est la virgule.
+- Les types sont détectés sur toutes les lignes : entier, décimal, date ISO (`2021-07-26`, avec ou sans heure) ou texte.
+  Les dates au format `26/07/2021` restent du texte. Les cases vides deviennent `NULL`.
+- **Nom de table** : lettres, chiffres et `_`, commençant par une lettre ou `_`, 63 caractères au maximum. Il est enregistré
+  en minuscules. `table_schema` et les noms commençant par `pg_` sont réservés.
+- Réimporter sous le même nom **remplace** la table. Une table qui existe déjà sans avoir été créée par l'application
+  n'est jamais écrasée : l'interface affiche une erreur et vous choisissez un autre nom.
+
+**Poser des questions**
+- Interrogez les tables que vous avez importées, en langage naturel.
+- Vous pouvez aussi poser une question générale sur les données ou sur SQL ; une question sans rapport avec ce sujet reçoit
+  une réponse de refus poli.
+- Si l'IA écrit une requête invalide, l'application la lui fait corriger : trois essais au maximum, puis elle l'indique.
+
+---
+
+## Dépannage
+
+Regardez toujours **le terminal où tourne `make dev`** : il contient la cause réelle, que l'interface résume en une ligne.
+
+| Ce que vous voyez | Cause probable | Que faire |
+|---|---|---|
+| `make: command not found` | `make` n'est pas installé | Voir l'[étape 0](#0-ce-quil-faut-avoir) ou [Sans make](#sans-make) |
+| `make dev` : `server/.env is missing` | Le fichier de configuration n'existe pas | `cp server/.env.sample server/.env` (étape 2) |
+| `make db-up` : `port is already allocated` | Un PostgreSQL local occupe déjà le port 5432 | Arrêtez-le, ou remplacez `127.0.0.1:5432:5432` par `127.0.0.1:5433:5432` dans `docker-compose.yml` et mettez `DB_PORT=5433` dans `server/.env` |
+| `make db-up` : `--wait` non reconnu | Docker Compose ancien | `docker compose up -d db`, puis attendez une dizaine de secondes |
+| `Failed to start server: … ECONNREFUSED` | La base n'est pas démarrée ou `DB_*` est faux | `make db-up` (et vérifiez que Docker est lancé), puis relancez `make dev` |
+| `listen EADDRINUSE … :3000` | Le port 3000 est pris par un autre programme | Fermez-le, ou changez `PORT` dans `server/.env` **et** lancez avec `VITE_API_URL=http://localhost:<port> make dev` |
+| L'interface affiche `Failed to fetch` | L'API n'est pas démarrée ou n'est pas à l'adresse attendue | Vérifiez le terminal de `make dev` ; l'API répond sur `http://localhost:3000` (une page « 404 » à cette adresse est normale : elle n'a pas de page d'accueil) |
+| `Failed to process CSV file` ou `Failed to process query` | Échec de l'appel à OpenAI ou d'une étape interne | Lisez le terminal. `401 Incorrect API key` : clé absente, fausse ou encore à la valeur d'exemple de `.env.sample` (étape 2, puis relancez `make dev`). Une erreur `429` : crédit ou quota OpenAI épuisé |
+| `Invalid table name: …` | Le nom contient un caractère interdit | Voir les [règles de nom](#utiliser-linterface) |
+| `A table named "…" already exists and was not created by this application` | Une table de ce nom existe déjà dans la base | Choisissez un autre nom |
+| `Invalid CSV file: …` ou `CSV file is empty` | Le fichier est mal formé (nombre de colonnes différent selon les lignes) ou sans données | Corrigez le fichier |
+| `Please choose a .csv file.` | Le fichier n'a pas l'extension `.csv` | Choisissez un fichier `.csv` |
+| Les questions n'obtiennent pas de bonne réponse | L'IA a mal compris la table | Reformulez en citant les noms de colonnes ; relancez l'import si vous avez changé le fichier |
+
+---
+
+## Commandes make
+
+`make` seul affiche la liste.
+
+| Commande | Rôle |
+|---|---|
+| `make dev` | Lance l'API (3000) et l'interface (5173). Ctrl-C arrête les deux ; si l'un des deux s'arrête, l'autre aussi. |
+| `make db-up` | Démarre PostgreSQL dans Docker, avec les identifiants de `server/.env.sample`. |
+| `make db-down` | Arrête la base (les données sont conservées). |
+| `make db-reset` | Arrête la base **et supprime ses données**. |
+| `make install` | Installe les dépendances du serveur et de l'interface (fait automatiquement au besoin). |
+| `make test` | Lance tous les tests (voir [Tests](#tests)). |
+| `make check` | Vérifie les types, lance le lint et compile le serveur et l'interface. |
+| `make verify` | `make check` puis `make test`. |
+| `make clean` | Supprime les fichiers compilés. |
+
+## Configuration
+
+Tout se règle dans `server/.env` (copié depuis `server/.env.sample`).
+
+| Variable | Valeur d'exemple | Rôle |
+|---|---|---|
+| `OPENAI_API_KEY` | *(à remplacer)* | Votre clé OpenAI. Obligatoire. |
+| `DB_USER` / `DB_PASSWORD` | `postgres` / `admin` | Identifiants PostgreSQL. |
+| `DB_HOST` / `DB_PORT` | `localhost` / `5432` | Adresse de PostgreSQL. |
+| `DB_NAME` | `sqlgen` | Base utilisée par l'application. |
+| `PORT` | `3000` | Port de l'API. |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Modèle OpenAI (facultatif). |
+| `DB_READONLY_USER` / `DB_READONLY_PASSWORD` | — | Rôle SQL en lecture seule pour les requêtes écrites par l'IA (facultatif, voir [Sécurité](#sécurité)). |
+
+L'interface appelle l'API sur `http://localhost:3000`. Pour une autre adresse, définissez `VITE_API_URL` au lancement :
+`VITE_API_URL=http://localhost:4000 make dev`.
+
+`docker-compose.yml` utilise les mêmes identifiants que `server/.env.sample` : si vous modifiez l'un, modifiez l'autre.
+
+---
+
+## Fonctionnement
 
 ![AI SQL Query Generator Architecture](./architecture.png)
 
-The application consists of two main components:
+- **Interface** (`ui/`) : React, TypeScript et composants shadcn/ui. Elle envoie les CSV et les questions à l'API.
+- **API** (`server/src`) : Express, TypeScript et PostgreSQL.
+- **Racine** : `Makefile` (commandes), `docker-compose.yml` (PostgreSQL), `scripts/dev.sh` (lancement conjoint),
+  `data/` (CSV d'exemple).
 
-### Frontend (`ui/src/App.tsx`)
-- React-based UI utilizing TypeScript and shadcn/ui components
-- Enables users to upload CSV files and query the data using natural language
+**Import d'un CSV**
+1. L'API détecte les types des colonnes et crée la table PostgreSQL (en une seule transaction : un import qui échoue ne
+   détruit pas la table existante).
+2. L'analyseur de tables (`server/src/tableAnalyzer.ts`) échantillonne les données, calcule des statistiques (types,
+   valeurs distinctes, part de valeurs nulles, minimum et maximum) et demande à l'IA de décrire chaque colonne. Ces
+   descriptions sont conservées pour répondre aux questions.
 
-### Backend (`server/src`)
-- Express.js server with TypeScript
-- PostgreSQL database integration
-- Multi-step AI query processing pipeline:
-  1. Query triage and classification
-  2. Schema analysis and table profiling
-  3. SQL generation
-  4. Result formatting
-  5. Answer validation
+**Question**
+1. **Triage** : la question est classée « sur les données », « générale » ou « hors sujet ».
+2. **Analyse du schéma** : l'IA identifie les tables et colonnes utiles.
+3. **Génération SQL** : l'IA écrit une requête PostgreSQL.
+4. **Exécution** : la requête s'exécute en lecture seule.
+5. **Réponse** : le résultat est reformulé en langage naturel, puis **validé** ; en cas d'échec, la requête est régénérée en
+   tenant compte de l'erreur précédente (trois essais au maximum).
 
-### Table Analyzer (`server/src/tableAnalyzer.ts`)
-The table analyzer component performs intelligent data profiling:
-- Samples data from uploaded tables
-- Analyzes column types, distinct values, and null ratios
-- Generates statistical summaries (min/max for numeric/dates)
-- Creates AI-powered descriptions of each field
-- Provides context for more accurate query generation
+## Sécurité
 
-## Quick start with `make`
+Il s'agit d'une preuve de concept, mais deux protections sont en place car elles sont peu coûteuses et qu'un échec
+signifierait une perte de données :
 
-`make` (GNU Make; on Windows, use WSL or Git Bash) drives everything. Run `make` to list the commands.
+- **Noms de table** : validés (`^[a-z_][a-z0-9_]{0,62}$` après mise en minuscules) et toujours quotés. La table interne
+  `table_schema` et les noms `pg_*` sont réservés.
+- **SQL écrit par l'IA** : n'est exécuté que s'il s'agit d'une seule instruction `SELECT`/`WITH`, dans une transaction
+  `READ ONLY` toujours annulée, avec un délai maximal de 10 secondes.
 
-```
-cp server/.env.sample server/.env   # then set OPENAI_API_KEY
-make db-up                          # optional: PostgreSQL in Docker, matching .env.sample
-make dev                            # API on :3000 and UI on :5173; Ctrl-C stops both
-make verify                         # type-check, lint, build, then every test
-```
-
-Dependencies are installed the first time they are needed. Without Docker, point `DB_HOST`, `DB_PORT`, `DB_USER` and
-`DB_PASSWORD` (in `server/.env`) to your own PostgreSQL. `make test` runs every suite even if one fails, so a missing
-database does not hide a failing UI test; the integration tests need PostgreSQL (see [Tests](#tests)).
-
-## Setup
-
-1. Install dependencies:
-
-# Frontend
-```
-cd ui
-npm install
-```
-
-# Backend
-1. Install dependencies:
-```
-cd server
-npm install
-```
-
-2. Set up your PostgreSQL database and configure environment variables:
-   Copy the `.env.sample` file to `.env` and update the values:
-
-```env
-DB_USER=postgres
-DB_HOST=localhost
-DB_NAME=sqlgen
-DB_PASSWORD=admin
-DB_PORT=5432
-PORT=3000
-OPENAI_API_KEY=your_openai_api_key
-```
-
-   Optional variables: `OPENAI_MODEL` (defaults to `gpt-4o-mini`) and `DB_READONLY_USER` / `DB_READONLY_PASSWORD`
-   (see [Security notes](#security-notes)).
-
-3. Start the development servers:
-
-# Frontend
-```
-cd ui
-npm run dev
-```
-The UI calls the API at `http://localhost:3000` by default. Set `VITE_API_URL` to use another address.
-
-# Backend
-```
-cd server
-npm run dev
-```
-
-## How It Works
-
-1. **CSV Upload**
-   - Upload a CSV file through drag-and-drop or file selection
-   - The server automatically detects column types and creates a PostgreSQL table
-   - Table schema is analyzed and stored for future queries
-
-2. **Query Processing**
-   - User enters a natural language question
-   - Query is classified as general, data-specific, or out-of-scope
-   - For data queries:
-     - Available schema is analyzed for relevance
-     - SQL query is generated using AI
-     - Results are formatted into natural language
-     - Response is validated for accuracy
-
-3. **Error Handling**
-   - Multiple retry attempts for failed queries
-   - Context-aware error messages
-   - Query regeneration with previous error context
-
-## Example Usage
-
-1. Upload a CSV file (a sample is provided in `data/customers-1000.csv`):
-   ```
-   Drag and drop your CSV file into the upload area
-   Enter a table name for your data (letters, digits and underscores; stored in lowercase)
-   Click "Upload CSV"
-   ```
-   Uploading again under the same name replaces the table, but only if this application created it.
-   A table that already exists for another reason is never overwritten.
-
-2. Query your data:
-   ```
-   "How many customers are there in each country?"
-   "Which companies have more than one customer?"
-   "How many customers subscribed in 2021?"
-   ```
-
-## Technical Details
-
-The application uses a sophisticated prompt engineering approach to generate accurate SQL queries:
-
-- Query classification to determine appropriate response type
-- Schema analysis to identify relevant tables and relationships
-- PostgreSQL-specific query generation with best practices
-- Multi-step validation to ensure accurate responses
-- Error recovery with context-aware query regeneration
-
-## Security notes
-
-This is a proof of concept, but two protections are in place because they are cheap and the failure mode is data loss:
-
-- **Table names** are validated (`^[a-z_][a-z0-9_]{0,62}$` after lowercasing) and always quoted. The internal
-  `table_schema` table and `pg_*` names are reserved.
-- **SQL written by the AI** only runs if it is a single `SELECT`/`WITH` statement, inside a `READ ONLY` transaction that is
-  always rolled back, with a 10 second statement timeout.
-
-`READ ONLY` stops writes, not reads. If `DB_USER` is a superuser (as in the sample configuration), AI-generated SQL can still
-call functions such as `pg_read_file`. To close that, create a role that can only read and set `DB_READONLY_USER` /
-`DB_READONLY_PASSWORD`; run this as `DB_USER`, in the application database:
+`READ ONLY` empêche les écritures, pas les lectures. Si `DB_USER` est un superutilisateur (comme dans la configuration
+d'exemple), le SQL de l'IA peut encore appeler des fonctions comme `pg_read_file`. Pour fermer ce cas, créez un rôle qui
+ne peut que lire et renseignez `DB_READONLY_USER` / `DB_READONLY_PASSWORD`. Exécutez ceci avec `DB_USER`, dans la base de
+l'application :
 
 ```sql
 CREATE ROLE sqlgen_readonly LOGIN PASSWORD 'change_me';
 GRANT CONNECT ON DATABASE sqlgen TO sqlgen_readonly;
 GRANT USAGE ON SCHEMA public TO sqlgen_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO sqlgen_readonly;
--- tables created by later uploads
+-- tables créées par les imports suivants
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO sqlgen_readonly;
 ```
 
-Not covered: authentication, CORS, rate limiting and cleanup of uploaded files. The query results sent to OpenAI are not filtered either.
+**Non couvert** : authentification, CORS, limitation du débit et nettoyage des fichiers importés (dossier
+`server/uploads`). Les résultats des requêtes sont envoyés à OpenAI sans filtrage. L'API écoute sur toutes les interfaces
+réseau, sans authentification et avec CORS ouvert : ne la lancez que sur un réseau de confiance. PostgreSQL (Docker) n'est
+exposé que sur la machine locale.
 
 ## Tests
 
-**Server** (`cd server`, Node 22 or later):
+`make test` lance tout. Détail :
 
-| Command | What it runs | Needs |
+**Serveur** (`cd server`, Node 22 ou plus) :
+
+| Commande | Ce qu'elle lance | Prérequis |
 |---|---|---|
-| `npm run test:unit` | Pure functions: table-name and SQL guards, CSV type inference, parsing of AI answers | nothing |
-| `npm run test:integration` | The real routes, SQL and AI pipeline: uploads and SQL injection, read-only guard, dedicated role, `/query` | PostgreSQL |
-| `npm test` | Both | PostgreSQL |
-| `npm run typecheck` | Type-checks `src` and `test` | nothing |
+| `npm run test:unit` | Fonctions pures : gardes sur les noms de table et le SQL, détection des types CSV, lecture des réponses de l'IA | rien |
+| `npm run test:integration` | Les vraies routes, le SQL et le pipeline IA : imports et injection SQL, garde en lecture seule, rôle dédié, `/query` | PostgreSQL |
+| `npm test` | Les deux | PostgreSQL |
+| `npm run typecheck` | Vérifie les types de `src` et `test` | rien |
 
-Integration tests never call OpenAI: the application talks to a local fake (`server/test/helpers/fake-openai.ts`), so
-they need no API key and cost nothing. Each test file creates its own throwaway database (`sqlgen_test_*`) and drops it
-afterwards; `DB_NAME` is never used. They connect with `DB_HOST`, `DB_PORT`, `DB_USER` and `DB_PASSWORD` (from the
-environment or `server/.env`), and that user must be allowed to create databases and roles (a superuser such as
-`postgres` is). Set `TEST_VERBOSE=1` to see the application logs. If a run is killed, the databases it
-created (`sqlgen_test_*`) and roles (`sqlgen_ro_*`) may remain: drop them by hand.
+Les tests d'intégration n'appellent jamais OpenAI : l'application parle à un faux local
+(`server/test/helpers/fake-openai.ts`), donc pas de clé ni de coût. Chaque fichier de test crée sa propre base jetable
+(`sqlgen_test_*`) et la supprime ensuite ; `DB_NAME` n'est jamais utilisé. Ils se connectent avec `DB_HOST`, `DB_PORT`,
+`DB_USER` et `DB_PASSWORD` (environnement ou `server/.env`) ; cet utilisateur doit pouvoir créer des bases et des rôles
+(un superutilisateur comme `postgres` le peut). `TEST_VERBOSE=1` affiche les journaux de l'application. Si une exécution est
+interrompue de force, les bases `sqlgen_test_*` et les rôles `sqlgen_ro_*` qu'elle a créés peuvent rester : supprimez-les à
+la main.
 
-**UI** (`cd ui`): `npm test` runs the component tests (Vitest and Testing Library, with the API replaced by a fake
-`fetch`); `npm run test:watch` re-runs them as you edit.
+**Interface** (`cd ui`) : `npm test` lance les tests de composants (Vitest et Testing Library, avec l'API remplacée par un
+faux `fetch`) ; `npm run test:watch` les relance à chaque modification.
 
-## Contributing
+## Contribuer
 
-This is a proof of concept and is not intended for production use. This repository is for educational purposes and will not be maintained. Please feel free to fork and maintain your own version!
+Il s'agit d'une preuve de concept, non destinée à la production. Ce dépôt est à visée pédagogique et ne sera pas
+maintenu : n'hésitez pas à le dupliquer (fork) et à le faire évoluer.
 
-## License
+## Licence
 
-MIT License - feel free to use this code for your own projects!
+Licence MIT : réutilisez ce code librement pour vos propres projets.
