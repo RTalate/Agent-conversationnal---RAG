@@ -202,7 +202,7 @@ Regardez toujours **le terminal où tourne `make dev`** : il contient la cause r
 | `make verify` | `make check` puis `make test`. |
 | `make install` | Installe les dépendances du serveur et de l'interface (fait automatiquement au besoin). |
 | `make db-stop` | Arrête la base locale si un lancement précédent l'a laissée active. |
-| `make db-reset` | Arrête la base locale et **supprime ses données** (toutes les tables importées). |
+| `make db-reset` | Arrête la base locale et **supprime ses données** (toutes les tables importées), dans `server/.data/postgres`. Si vous avez changé `DB_DATA_DIR`, supprimez ce dossier vous-même. |
 | `make clean` | Supprime les fichiers compilés. |
 
 ## Configuration
