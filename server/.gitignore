@@ -2,3 +2,6 @@ dist/
 node_modules/
 uploads/
 .env
+
+# local PostgreSQL data (embedded database)
+.data/

@@ -1,27 +1,28 @@
 import pg from "pg";
 import type { PoolClient, QueryConfig } from "pg";
+import { config } from "./config";
 import { assertSelectQuery } from "./sql-safety";
 const { Pool } = pg;
 
 const connection = {
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  port: parseInt(process.env.DB_PORT || "5432"),
+  host: config.db.host,
+  database: config.db.name,
+  port: config.db.port,
 };
 
 const pool = new Pool({
   ...connection,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
+  user: config.db.user,
+  password: config.db.password,
 });
 
 // SQL written by the LLM can run as a dedicated role that only has SELECT (see README).
 // Without it, it runs as DB_USER, inside a READ ONLY transaction.
-const readOnlyPool = process.env.DB_READONLY_USER
+const readOnlyPool = config.db.readOnlyUser
   ? new Pool({
       ...connection,
-      user: process.env.DB_READONLY_USER,
-      password: process.env.DB_READONLY_PASSWORD,
+      user: config.db.readOnlyUser,
+      password: config.db.readOnlyPassword,
     })
   : pool;
 
@@ -31,6 +32,16 @@ if (readOnlyPool === pool) {
       "Set DB_READONLY_USER to a role with SELECT-only privileges for defense in depth."
   );
 }
+
+// The server can end idle connections (it is restarted or stopped, a session is terminated). pg reports
+// it as an "error" event on the pool, and a process with no listener for it crashes. The pool reconnects
+// by itself on the next query, so it is enough to say so.
+const ADMIN_SHUTDOWN = "57P01";
+const reportPoolError = (error: Error & { code?: string }) => {
+  if (error.code !== ADMIN_SHUTDOWN) console.error("Unexpected error on an idle database connection:", error.message);
+};
+pool.on("error", reportPoolError);
+if (readOnlyPool !== pool) readOnlyPool.on("error", reportPoolError);
 
 const READ_ONLY_STATEMENT_TIMEOUT_MS = 10_000;
 

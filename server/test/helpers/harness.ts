@@ -1,23 +1,29 @@
-import 'dotenv/config';
-import { randomBytes } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from 'pg';
+import { startEmbeddedPostgres, EmbeddedDatabaseError, type EmbeddedDatabase } from '../../src/embedded-postgres';
 import { quoteIdent } from '../../src/sql-safety';
 import { FakeOpenAI } from './fake-openai';
 
 // Starts the real application (routes, SQL, pipeline) on a random port, with:
-//  - a throwaway PostgreSQL database, created for this test file and dropped at the end;
-//  - a FakeOpenAI server instead of OpenAI.
-// It never touches DB_NAME: the connection settings (DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, and a
-// .env file if there is one) are only used to create and drop its own database. The user needs
-// the privilege to create databases and roles (a superuser such as `postgres` does).
+//  - its own PostgreSQL server (the embedded one the application uses), on a free port and in a
+//    temporary folder, started for this test file and deleted at the end;
+//  - a FakeOpenAI server standing in for OpenRouter.
+// Nothing has to be installed or running beforehand, and nothing of the developer's own database or
+// server/.env is used.
 //
 // The application reads its configuration when its modules are first imported, so a test file can
 // start one harness only.
+
+export interface HarnessOptions {
+  /** Create a role with SELECT-only privileges and use it for the SQL written by the AI. */
+  readOnlyRole?: boolean;
+  /** Extra environment for the application (LLM_MODEL, LLM_JSON_MODE...). */
+  env?: Record<string, string>;
+}
 
 export interface Harness {
   baseUrl: string;
@@ -25,7 +31,7 @@ export interface Harness {
   ai: FakeOpenAI;
   /** Set when started with { readOnlyRole: true }: the role used for AI-generated SQL. */
   readOnlyRole?: string;
-  /** Runs SQL in the throwaway database as DB_USER, the application's own user. */
+  /** Runs SQL in the test database as its owner, the application's own user. */
   sql(text: string, params?: unknown[]): Promise<any[]>;
   /** POST /upload-csv. A null csv sends no file; an undefined tableName sends no table name. */
   upload(tableName: string | undefined, csv: string | Buffer | null, filename?: string): Promise<HttpResult>;
@@ -41,7 +47,29 @@ export interface HttpResult {
   body: any;
 }
 
-export async function startHarness({ readOnlyRole = false }: { readOnlyRole?: boolean } = {}): Promise<Harness> {
+/** A port nobody listens on right now. */
+export function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address() as AddressInfo;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+/** A temporary folder PostgreSQL can use even when the tests run as root (it then runs as "postgres"). */
+export async function tempDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(path.join(tmpdir(), prefix));
+  await chmod(dir, 0o755);
+  return dir;
+}
+
+export const TEST_DB_USER = 'postgres';
+export const TEST_DB_PASSWORD = 'test-password';
+
+export async function startHarness({ readOnlyRole = false, env = {} }: HarnessOptions = {}): Promise<Harness> {
   const cleanups: Array<() => Promise<void> | void> = [];
   const stop = async () => {
     const errors: unknown[] = [];
@@ -59,68 +87,62 @@ export async function startHarness({ readOnlyRole = false }: { readOnlyRole?: bo
       Object.assign(console, { log() {}, info() {}, warn() {}, error() {} });
       cleanups.push(() => void Object.assign(console, saved));
     }
-    // Settings meant for the developer's own database must not leak into the tests.
-    delete process.env.DB_READONLY_USER;
-    delete process.env.DB_READONLY_PASSWORD;
-    delete process.env.OPENAI_MODEL;
 
     const ai = await FakeOpenAI.start();
     cleanups.push(() => ai.close());
 
-    const connection = {
-      host: process.env.DB_HOST,
-      port: parseInt(process.env.DB_PORT || '5432'),
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-    };
-    const admin = new Client({ ...connection, database: process.env.TEST_ADMIN_DB || 'postgres' });
-    try {
-      await admin.connect();
-    } catch (error: any) {
-      throw new Error(
-        `Integration tests need a reachable PostgreSQL (${connection.host ?? 'localhost'}:${connection.port}, ` +
-        `user ${connection.user ?? '(default)'}) with the privilege to create databases: ${error.message}\n` +
-        'Set DB_HOST, DB_PORT, DB_USER and DB_PASSWORD (or server/.env), or run "npm run test:unit".'
-      );
+    const dbName = 'sqlgen_test';
+    const dataRoot = await tempDir('sqlgen-test-pg-');
+    cleanups.push(() => rm(dataRoot, { recursive: true, force: true }));
+
+    // Another test file may pick the same free port between our check and the server's start: try again.
+    let port = 0;
+    let database: EmbeddedDatabase | undefined;
+    for (let attempt = 1; !database; attempt++) {
+      port = await freePort();
+      try {
+        database = await startEmbeddedPostgres({
+          dataDir: path.join(dataRoot, 'pg'), port, user: TEST_DB_USER, password: TEST_DB_PASSWORD, database: dbName,
+        });
+      } catch (error) {
+        const portTaken = error instanceof EmbeddedDatabaseError && /already (used|listening)/.test(error.message);
+        if (!portTaken || attempt >= 3) throw error;
+      }
     }
-    cleanups.push(() => admin.end());
+    cleanups.push(() => database!.stop());
 
-    // Cleanups run in reverse order: the role is dropped last, once the database it has
-    // privileges on is gone.
-    let role: string | undefined;
-    if (readOnlyRole) {
-      role = `sqlgen_ro_${randomBytes(3).toString('hex')}`;
-      await admin.query(`CREATE ROLE ${quoteIdent(role)} LOGIN PASSWORD 'test-password'`);
-      cleanups.push(async () => { await admin.query(`DROP ROLE IF EXISTS ${quoteIdent(role!)}`); });
-    }
-
-    const dbName = `sqlgen_test_${process.pid}_${randomBytes(3).toString('hex')}`;
-    await admin.query(`CREATE DATABASE ${quoteIdent(dbName)}`);
-    cleanups.push(async () => { await admin.query(`DROP DATABASE IF EXISTS ${quoteIdent(dbName)} WITH (FORCE)`); });
-
-    const db = new Client({ ...connection, database: dbName });
+    const db = new Client({ host: '127.0.0.1', port, user: TEST_DB_USER, password: TEST_DB_PASSWORD, database: dbName });
     await db.connect();
     cleanups.push(() => db.end());
     const sql = async (text: string, params?: unknown[]) => (await db.query(text, params)).rows;
 
-    if (role) {
+    let role: string | undefined;
+    if (readOnlyRole) {
+      role = 'sqlgen_ro';
+      await db.query(`CREATE ROLE ${quoteIdent(role)} LOGIN PASSWORD 'test-password'`);
       // The statements documented in the README ("Security notes"), with the test names.
       await db.query(`GRANT CONNECT ON DATABASE ${quoteIdent(dbName)} TO ${quoteIdent(role)}`);
       await db.query(`GRANT USAGE ON SCHEMA public TO ${quoteIdent(role)}`);
       await db.query(`GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${quoteIdent(role)}`);
       await db.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO ${quoteIdent(role)}`);
-      process.env.DB_READONLY_USER = role;
-      process.env.DB_READONLY_PASSWORD = 'test-password';
     }
 
-    process.env.DB_NAME = dbName;
-    process.env.OPENAI_BASE_URL = ai.url;
+    // Everything the application reads is set here, empty values included: dotenv, which the
+    // application loads, never overrides a variable that already exists, so a developer's own
+    // server/.env cannot leak into the tests.
+    Object.assign(process.env, {
+      PORT: '', DB_DATA_DIR: '', DB_EMBEDDED: 'false',
+      DB_HOST: '127.0.0.1', DB_PORT: String(port), DB_NAME: dbName, DB_USER: TEST_DB_USER, DB_PASSWORD: TEST_DB_PASSWORD,
+      DB_READONLY_USER: role ?? '', DB_READONLY_PASSWORD: role ? 'test-password' : '',
+      OPENROUTER_API_KEY: 'test-key', LLM_BASE_URL: ai.url, LLM_MODEL: '', LLM_JSON_MODE: '',
+      ...env,
+    });
     const { createApp } = await import('../../src/app');
     const { initializeTables, closeDb } = await import('../../src/db');
     await initializeTables();
     cleanups.push(() => closeDb());
 
-    const uploadDir = await mkdtemp(path.join(tmpdir(), 'sqlgen-test-uploads-'));
+    const uploadDir = await tempDir('sqlgen-test-uploads-');
     cleanups.push(() => rm(uploadDir, { recursive: true, force: true }));
     const server: Server = createApp({ uploadDir }).listen(0, '127.0.0.1');
     await new Promise<void>(resolve => server.once('listening', resolve));
