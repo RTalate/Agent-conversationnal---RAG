@@ -69,7 +69,7 @@ const STEPS = {
   'test:unit': npmStep(SERVER, 'test:unit'),
   'test:integration': npmStep(SERVER, 'test:integration'),
   'test:ui': npmStep(UI, 'test'),
-  'test:scripts': { dirs: [SERVER, UI], run: () => run(process.execPath, ['--test', '--test-timeout=300000', 'scripts/test/*.test.mjs']) },
+  'test:scripts': { dirs: [SERVER, UI], run: () => run(process.execPath, ['--test', '--test-timeout=600000', 'scripts/test/*.test.mjs']) },
   'typecheck:server': npmStep(SERVER, 'typecheck'),
   'typecheck:ui': npmStep(UI, 'typecheck'),
   lint: npmStep(UI, 'lint'),

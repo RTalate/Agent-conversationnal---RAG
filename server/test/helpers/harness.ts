@@ -93,7 +93,7 @@ export async function startHarness({ readOnlyRole = false, env = {} }: HarnessOp
 
     const dbName = 'sqlgen_test';
     const dataRoot = await tempDir('sqlgen-test-pg-');
-    cleanups.push(() => rm(dataRoot, { recursive: true, force: true }));
+    cleanups.push(() => rm(dataRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 
     // Another test file may pick the same free port between our check and the server's start: try again.
     let port = 0;
@@ -143,7 +143,7 @@ export async function startHarness({ readOnlyRole = false, env = {} }: HarnessOp
     cleanups.push(() => closeDb());
 
     const uploadDir = await tempDir('sqlgen-test-uploads-');
-    cleanups.push(() => rm(uploadDir, { recursive: true, force: true }));
+    cleanups.push(() => rm(uploadDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
     const server: Server = createApp({ uploadDir }).listen(0, '127.0.0.1');
     await new Promise<void>(resolve => server.once('listening', resolve));
     cleanups.push(() => {

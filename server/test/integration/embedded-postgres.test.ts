@@ -54,7 +54,7 @@ const pidOf = (options: EmbeddedDatabaseOptions) => Number(readFileSync(path.joi
 
   afterEach(async () => {
     for (const database of running.splice(0)) await database.stop().catch(() => {});
-    for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true });
+    for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
   it('starts a server with the database, and accepts the credentials', async () => {

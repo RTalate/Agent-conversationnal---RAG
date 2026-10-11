@@ -34,7 +34,7 @@ describe('the database commands', () => {
 
   afterEach(async () => {
     for (const database of running.splice(0)) await database.stop().catch(() => {});
-    for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true });
+    for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
   it('db:stop stops the running database and keeps its data', async () => {

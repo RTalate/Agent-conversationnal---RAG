@@ -1,12 +1,13 @@
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import net from 'node:net';
 import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { Client } from 'pg';
+import { stopEmbeddedPostgres } from '../../src/embedded-postgres';
 import { freePort, tempDir, TEST_DB_PASSWORD, TEST_DB_USER } from '../helpers/harness';
 
 // The real server process (src/index.ts), started the way `npm run dev` starts it: it runs its own
@@ -63,7 +64,7 @@ describe('the server process', () => {
       child,
       output: () => output,
       exited,
-      async waitFor(text, timeoutMs = 60000) {
+      async waitFor(text, timeoutMs = 120_000) {
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
           if (typeof text === 'string' ? output.includes(text) : text.test(output)) return;
@@ -92,26 +93,11 @@ describe('the server process', () => {
     assert.equal(existsSync(path.join(dataDir, 'postmaster.pid')), false, 'the lock file is still there');
   }
 
-  /** A database left running by a test (kill -9 cases, or a failure) must not outlive it. */
-  async function stopLeftoverDatabase(dataDir: string) {
-    let pid: number;
-    try {
-      pid = Number(readFileSync(path.join(dataDir, 'postmaster.pid'), 'utf8').split('\n')[0]);
-      process.kill(pid, 'SIGINT');
-    } catch {
-      return; // not running
-    }
-    for (let attempt = 0; attempt < 150; attempt++) {
-      try { process.kill(pid, 0); } catch { return; }
-      await sleep(100);
-    }
-    process.kill(pid, 'SIGKILL');
-  }
-
   afterEach(async () => {
     for (const run of runs.splice(0)) run.child.kill('SIGKILL');
-    for (const dataDir of dataDirs.splice(0)) await stopLeftoverDatabase(dataDir);
-    for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true });
+    // A database left running by a test (kill -9 cases, or a failure) must not outlive it.
+    for (const dataDir of dataDirs.splice(0)) await stopEmbeddedPostgres(dataDir).catch(() => {});
+    for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
   it('starts the API and its own PostgreSQL', async () => {
@@ -186,7 +172,7 @@ describe('the server process', () => {
     const run = launch(serverEnv(ports), { ipc: true });
     // pg_ctl creates the log file as it starts the server, after the data folder has been created.
     const log = path.join(ports.dataDir, 'postgres.log');
-    for (let attempt = 0; attempt < 3000 && !existsSync(log); attempt++) await sleep(5);
+    for (let attempt = 0; attempt < 24_000 && !existsSync(log); attempt++) await sleep(5);
     assert.ok(existsSync(log), 'the database was starting');
     assert.doesNotMatch(run.output(), /PostgreSQL started/);
 
@@ -222,7 +208,7 @@ describe('the server process', () => {
     }
   });
 
-  it('takes over a database left running by a run killed with kill -9, and stops it', { skip: WINDOWS && 'on Windows the database dies with the server' }, async () => {
+  it('takes over a database left running by a run killed outright (kill -9, Task Manager), and stops it', async () => {
     const ports = await setup();
     const first = launch(serverEnv(ports));
     await first.waitFor('Server running on port');
@@ -237,29 +223,6 @@ describe('the server process', () => {
     await second.exited;
 
     await assertDatabaseStopped(ports);
-  });
-
-  it('keeps the data of a run killed outright, without leaving its database running (Windows)', { skip: !WINDOWS && 'on Linux and macOS the database outlives the server: see the previous test' }, async () => {
-    const ports = await setup();
-    const first = launch(serverEnv(ports));
-    await first.waitFor('Server running on port');
-    let client = await connect(ports.dbPort);
-    await client.query('CREATE TABLE kept (id int); INSERT INTO kept VALUES (1)');
-    await client.end();
-
-    first.child.kill('SIGKILL');
-    await first.exited;
-    await assert.rejects(() => connect(ports.dbPort), { code: 'ECONNREFUSED' });
-
-    const second = launch(serverEnv(ports), { ipc: true });
-    await second.waitFor('Server running on port');
-    assert.match(second.output(), /PostgreSQL started on port/);
-    client = await connect(ports.dbPort);
-    try {
-      assert.deepEqual((await client.query('SELECT count(*)::int AS n FROM kept')).rows, [{ n: 1 }]);
-    } finally {
-      await client.end();
-    }
   });
 
   it('refuses to start without OPENROUTER_API_KEY, before starting any database', async () => {

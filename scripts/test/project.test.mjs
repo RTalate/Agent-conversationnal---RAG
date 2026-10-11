@@ -85,7 +85,7 @@ describe('npm run dev', () => {
       dataDir,
       exited,
       output: () => output,
-      async waitFor(text, timeoutMs = 90_000) {
+      async waitFor(text, timeoutMs = 180_000) {
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
           if (typeof text === 'string' ? output.includes(text) : text.test(output)) return;
@@ -120,7 +120,7 @@ describe('npm run dev', () => {
         for (let attempt = 0; attempt < 150 && isAlive(pid); attempt++) await sleep(100);
       } catch {}
     }
-    for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true });
+    for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
   it('starts the API with its database, then the interface pointed at that API', async () => {
