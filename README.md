@@ -190,6 +190,7 @@ ligne. Les lignes `[api]` viennent de l'API, les lignes `[ui]` de l'interface.
 | `The interface stopped: stopping the API` | En général, un autre programme occupe le port de l'interface (5173) : la ligne `[ui]` juste au-dessus le dit | Fermez-le, ou lancez sur un autre port : `$env:UI_PORT=5174; npm run dev` (PowerShell) ou `UI_PORT=5174 npm run dev` (macOS, Linux) |
 | `A PostgreSQL server is already listening on port … but rejected the user` | Un autre PostgreSQL occupe ce port avec d'autres identifiants | Changez `DB_PORT`, ou alignez `DB_USER` et `DB_PASSWORD` |
 | `PostgreSQL cannot run as root` | Vous êtes root (macOS, Linux) | Lancez avec un utilisateur normal, ou utilisez [votre propre PostgreSQL](#votre-propre-postgresql) |
+| `… already exists and is not a PostgreSQL data folder` | `DB_DATA_DIR` désigne un fichier, ou un dossier qui contient déjà autre chose (rien n'y a été modifié) | Choisissez un dossier vide ou qui n'existe pas encore |
 | `Could not start the embedded PostgreSQL …` (autre cause) | Le dossier de données n'est pas utilisable | Lisez la fin du message et le journal de la base, `server/.data/postgres/postgres.log`. Si les données sont inutiles : `npm run db:reset`. Sinon `DB_DATA_DIR` vers un dossier où vous pouvez écrire |
 | L'interface affiche `Failed to fetch` | L'API n'est pas démarrée ou n'est pas à l'adresse attendue | Vérifiez le terminal de `npm run dev` ; l'API répond sur `http://127.0.0.1:3000` (une page « 404 » à cette adresse est normale : elle n'a pas de page d'accueil) |
 | `Failed to process CSV file` ou `Failed to process query` | Échec de l'appel au modèle, ou d'une étape interne | Lisez le terminal. `401` : clé refusée. `402` : plus de crédit OpenRouter. `429` : trop de requêtes. Un identifiant de modèle inconnu : vérifiez `LLM_MODEL` |
@@ -198,7 +199,7 @@ ligne. Les lignes `[api]` viennent de l'API, les lignes `[ui]` de l'interface.
 | `Invalid CSV file: …` ou `CSV file is empty` | Le fichier est mal formé (nombre de colonnes différent selon les lignes) ou sans données | Corrigez le fichier |
 | `Please choose a .csv file.` | Le fichier n'a pas l'extension `.csv` | Choisissez un fichier `.csv` |
 | Les questions n'obtiennent pas de bonne réponse | Le modèle a mal compris la table | Reformulez en citant les noms de colonnes ; essayez un autre `LLM_MODEL` |
-| La base reste active après un arrêt brutal (macOS, Linux : `kill -9`, plantage) | Le processus qui la gérait a disparu | Rien à faire : le prochain `npm run dev` la reprend et l'arrêtera. Sinon `npm run db:stop` |
+| La base reste active après un arrêt brutal (processus tué, plantage) | Le processus qui la gérait a disparu | Rien à faire : le prochain `npm run dev` la reprend et l'arrêtera. Sinon `npm run db:stop` |
 
 ---
 
@@ -259,9 +260,10 @@ Par exemple : `$env:UI_PORT=5174; npm run dev` (PowerShell) ou `UI_PORT=5174 npm
 paquets npm (`@embedded-postgres/<système>`, un par système d'exploitation et processeur). Elle le démarre et l'arrête avec
 `pg_ctl`, l'outil de PostgreSQL : l'arrêt est propre sur tous les systèmes, Windows compris. La base écoute **uniquement sur
 la machine locale**, stocke le texte en UTF-8 et garde ses données dans `server/.data/postgres`, avec son journal
-(`postgres.log`). L'API l'arrête quand elle s'arrête (Ctrl-C, fermeture du terminal, `npm run dev` qui s'arrête). Sous macOS et
-Linux, une base restée active après un arrêt brutal est reprise et arrêtée au lancement suivant ; sous Windows, elle
-s'arrête avec l'API. Un PostgreSQL qui n'est pas le sien n'est jamais arrêté. Lancez un seul serveur par dossier de données.
+(`postgres.log`). L'API l'arrête quand elle s'arrête (Ctrl-C, fermeture du terminal, `npm run dev` qui s'arrête). Une base restée
+active après un arrêt brutal (processus tué, plantage) est reprise et arrêtée au lancement suivant. Un PostgreSQL qui
+n'est pas le sien n'est jamais arrêté, et la base ne s'installe jamais dans un dossier qui contient déjà autre chose.
+Lancez un seul serveur par dossier de données.
 
 **Import d'un CSV**
 1. L'API détecte les types des colonnes et crée la table PostgreSQL (en une seule transaction : un import qui échoue ne

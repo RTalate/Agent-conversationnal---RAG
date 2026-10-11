@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { access, chown, mkdir, open, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { access, chown, mkdir, open, readdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import pg from "pg";
 import { quoteIdent } from "./sql-safety";
@@ -140,6 +140,11 @@ export class StartFailure extends Error {
 // initdb works in a separate folder that is renamed once complete: a first start interrupted halfway
 // (Ctrl-C, window closed) never leaves a half-created data folder behind, only this one, deleted next time.
 async function initialise(programs: Programs, runAs: RunAs, { dataDir, user, password }: EmbeddedDatabaseOptions) {
+  // Never build over something else: a file, or a folder that already holds other things.
+  const existing = await stat(dataDir).catch(() => undefined);
+  if (existing && (!existing.isDirectory() || (await readdir(dataDir)).length > 0)) {
+    throw new Error(`${dataDir} already exists and is not a PostgreSQL data folder: nothing was changed. Choose another folder with DB_DATA_DIR.`);
+  }
   const staging = `${dataDir}.initdb`;
   await removeFolder(staging);
   if (runAs.uid !== undefined) {
@@ -216,6 +221,11 @@ async function readLogFrom(file: string, offset: number): Promise<string> {
 }
 
 async function startServer(programs: Programs, runAs: RunAs, { dataDir, port }: EmbeddedDatabaseOptions) {
+  // The lock file of a server that was killed still says "ready". On Windows, pg_ctl takes it for the new
+  // server's when both started within two seconds, and returns too early. No process runs from it: it goes.
+  const lock = await readPidFile(dataDir);
+  if (lock && !isAlive(lock.pid)) await rm(path.join(dataDir, "postmaster.pid"), { force: true });
+
   const logFile = path.join(dataDir, LOG_FILE);
   const offset = await fileSize(logFile);
   const { code, output } = await run(
@@ -271,13 +281,28 @@ async function probe({ port, user, password }: EmbeddedDatabaseOptions): Promise
 }
 
 async function ensureDatabase({ port, user, password, database }: EmbeddedDatabaseOptions): Promise<void> {
-  const client = new pg.Client({ host: LOOPBACK, port, user, password, database: "postgres" });
-  await client.connect();
+  const client = await connectWhenReady({ port, user, password });
   try {
     const { rowCount } = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [database]);
     if (!rowCount) await client.query(`CREATE DATABASE ${quoteIdent(database)}`);
   } finally {
     await client.end();
+  }
+}
+
+// A server pg_ctl reports as started may still refuse connections, or answer that it is starting up
+// (57P03), for a moment.
+async function connectWhenReady({ port, user, password }: Pick<EmbeddedDatabaseOptions, "port" | "user" | "password">) {
+  for (let attempt = 1; ; attempt++) {
+    const client = new pg.Client({ host: LOOPBACK, port, user, password, database: "postgres" });
+    try {
+      await client.connect();
+      return client;
+    } catch (error: any) {
+      await client.end().catch(() => {});
+      if (attempt >= 50 || !["ECONNREFUSED", "57P03"].includes(error?.code)) throw error;
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
   }
 }
 
@@ -287,8 +312,8 @@ const isAlive = (pid: number) => {
   try {
     process.kill(pid, 0); // checks that the process exists, sends nothing
     return true;
-  } catch {
-    return false;
+  } catch (error: any) {
+    return error?.code === "EPERM"; // it exists, but belongs to another user
   }
 };
 

@@ -305,15 +305,35 @@ const pidOf = (options: EmbeddedDatabaseOptions) => Number(readFileSync(path.joi
     assert.equal(existsSync(options.dataDir), false, 'nothing was created');
   });
 
-  it('explains why it cannot start when the data folder cannot be created', async () => {
-    const options = await newOptions();
-    writeFileSync(options.dataDir, 'this is a file, not a folder');
+  for (const [what, prepare] of [
+    ['a file', (dataDir: string) => writeFileSync(dataDir, 'this is a file, not a folder')],
+    ['a folder holding other things', (dataDir: string) => {
+      mkdirSync(dataDir);
+      writeFileSync(path.join(dataDir, 'report.txt'), 'this is a file, not a folder');
+    }],
+  ] as const) {
+    it(`never builds its data folder over ${what}, and says why`, async () => {
+      const options = await newOptions();
+      prepare(options.dataDir);
 
-    await assert.rejects(() => startEmbeddedPostgres(options), (error: unknown) => {
-      assert.ok(error instanceof EmbeddedDatabaseError);
-      assert.match(error.message, new RegExp(`Could not start the embedded PostgreSQL on port ${options.port}`));
-      return true;
+      await assert.rejects(() => startEmbeddedPostgres(options), (error: unknown) => {
+        assert.ok(error instanceof EmbeddedDatabaseError);
+        assert.match(error.message, new RegExp(`Could not start the embedded PostgreSQL on port ${options.port}: `));
+        assert.match(error.message, /already exists and is not a PostgreSQL data folder: nothing was changed\. Choose another folder with DB_DATA_DIR/);
+        return true;
+      });
+      const file = existsSync(path.join(options.dataDir, 'report.txt')) ? path.join(options.dataDir, 'report.txt') : options.dataDir;
+      assert.equal(readFileSync(file, 'utf8'), 'this is a file, not a folder', 'what was there is untouched');
+      await assertNothingListens(options);
     });
-    await assertNothingListens(options);
+  }
+
+  it('uses a data folder that exists but is empty', async () => {
+    const options = await newOptions();
+    mkdirSync(options.dataDir);
+
+    await start(options);
+
+    await (await connect(options)).end();
   });
 });

@@ -14,6 +14,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const WINDOWS = process.platform === 'win32';
 // Ctrl-C is a signal sent to the whole process group of the terminal: Windows has no such thing to send.
 const CTRL_C = WINDOWS && 'Windows has no signals to send';
+// A test that hangs fails on its own rather than holding up the whole file.
+const LIMIT = { timeout: 240_000 };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function freePort() {
@@ -123,7 +125,7 @@ describe('npm run dev', () => {
     for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
-  it('starts the API with its database, then the interface pointed at that API', async () => {
+  it('starts the API with its database, then the interface pointed at that API', LIMIT, async () => {
     const ports = await setup();
     const run = launch(ports);
 
@@ -139,7 +141,7 @@ describe('npm run dev', () => {
     assert.ok(app.includes(`http://127.0.0.1:${ports.apiPort}`), 'the interface calls the API on its port');
   });
 
-  it('stops the interface, the API and the database on Ctrl-C', { skip: CTRL_C }, async () => {
+  it('stops the interface, the API and the database on Ctrl-C', { ...LIMIT, skip: CTRL_C }, async () => {
     const ports = await setup();
     const run = launch(ports);
     await run.waitFor('Ready: open');
@@ -151,7 +153,7 @@ describe('npm run dev', () => {
     await assert.rejects(() => fetch(`http://localhost:${ports.uiPort}/`), 'the interface still answers');
   });
 
-  it('stops the API and the database when it is stopped itself (closing the terminal)', { skip: CTRL_C }, async () => {
+  it('stops the API and the database when it is stopped itself (closing the terminal)', { ...LIMIT, skip: CTRL_C }, async () => {
     const ports = await setup();
     const run = launch(ports);
     await run.waitFor('Ready: open');
@@ -162,7 +164,7 @@ describe('npm run dev', () => {
     await assertEverythingStopped(ports);
   });
 
-  it('does not start the interface when the API cannot start', async () => {
+  it('does not start the interface when the API cannot start', LIMIT, async () => {
     const ports = await setup();
     const other = net.createServer(socket => socket.destroy()).listen(ports.dbPort, '127.0.0.1');
     await new Promise(resolve => other.once('listening', resolve));
@@ -178,10 +180,16 @@ describe('npm run dev', () => {
     }
   });
 
-  it('stops the API and the database when the interface cannot start', async () => {
+  it('stops the API and the database when the interface cannot start', LIMIT, async () => {
     const ports = await setup();
-    const other = net.createServer().listen(ports.uiPort); // every address: the interface cannot use the port
-    await new Promise(resolve => other.once('listening', resolve));
+    // Another program on the port of the interface, at the addresses it uses. (On Windows, a program
+    // listening on every address does not prevent another from taking one of them.)
+    const others = [];
+    for (const host of ['127.0.0.1', '::1']) {
+      const other = net.createServer();
+      await new Promise(resolve => other.once('error', resolve).listen(ports.uiPort, host, resolve));
+      if (other.listening) others.push(other);
+    }
     try {
       const run = launch(ports);
 
@@ -189,11 +197,11 @@ describe('npm run dev', () => {
       assert.match(run.output(), /The interface stopped: stopping the API/);
       await assertEverythingStopped(ports);
     } finally {
-      await new Promise(resolve => other.close(resolve));
+      for (const other of others) await new Promise(resolve => other.close(resolve));
     }
   });
 
-  it('lets the API stop its database when it is killed outright', { skip: CTRL_C }, async () => {
+  it('lets the API stop its database when it is killed outright', { ...LIMIT, skip: CTRL_C }, async () => {
     const ports = await setup();
     const run = launch(ports);
     await run.waitFor('Ready: open');
