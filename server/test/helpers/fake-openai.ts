@@ -16,12 +16,20 @@ export interface AiCall {
   user: string;
   model?: string;
   temperature?: number;
+  /** The response_format the application asked for, if any. */
+  responseFormat?: unknown;
+  /** Request path and headers, to check how the API is reached. */
+  path?: string;
+  headers?: http.IncomingHttpHeaders;
   /** For 'tableSummary': the data dictionary the application computed from the table. */
   dictionary?: Record<string, any>;
 }
 
 /** What a handler returns: an object is sent as JSON, a string is sent as is (e.g. invalid JSON). */
 export type AiReply = Record<string, unknown> | string;
+
+/** Replaces the whole HTTP answer, to simulate an API that fails in its own way. */
+export const rawBody = (status: number, body: unknown): AiReply => ({ $raw: { status, body } });
 type Handler = (call: AiCall) => AiReply;
 
 const NO_SCHEMA: SchemaAnalysisResponse = { inScope: true, relevantTables: [], relationships: [] };
@@ -57,7 +65,7 @@ export class FakeOpenAI {
     ai.server = http.createServer((req, res) => {
       let body = '';
       req.on('data', chunk => (body += chunk));
-      req.on('end', () => ai.respond(JSON.parse(body || '{}'), res));
+      req.on('end', () => ai.respond(JSON.parse(body || '{}'), req, res));
     });
     await new Promise<void>(resolve => ai.server.listen(0, '127.0.0.1', resolve));
     ai.url = `http://127.0.0.1:${(ai.server.address() as AddressInfo).port}/v1`;
@@ -107,7 +115,7 @@ export class FakeOpenAI {
     }
   }
 
-  private respond(request: any, res: http.ServerResponse): void {
+  private respond(request: any, req: http.IncomingMessage, res: http.ServerResponse): void {
     const [system, user] = [request.messages?.[0]?.content ?? '', request.messages?.[1]?.content ?? ''];
     const step = identifyStep(system);
     res.setHeader('content-type', 'application/json');
@@ -118,13 +126,22 @@ export class FakeOpenAI {
       return;
     }
 
-    const call: AiCall = { step, system, user, model: request.model, temperature: request.temperature };
+    const call: AiCall = {
+      step, system, user, model: request.model, temperature: request.temperature,
+      responseFormat: request.response_format, path: req.url, headers: req.headers,
+    };
     if (step === 'tableSummary') {
       call.dictionary = JSON.parse(user.slice(user.indexOf('{'), user.lastIndexOf('}\n\nFormat') + 1));
     }
     this.calls.push(call);
 
     const reply = (this.handlers[step] ?? ((c: AiCall) => this.defaultReply(c)))(call);
+    if (typeof reply === 'object' && '$raw' in reply) {
+      const { status, body } = reply.$raw as { status: number; body: unknown };
+      res.statusCode = status;
+      res.end(JSON.stringify(body));
+      return;
+    }
     res.end(JSON.stringify({
       id: 'fake', object: 'chat.completion', created: 0, model: request.model,
       choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: typeof reply === 'string' ? reply : JSON.stringify(reply) } }],

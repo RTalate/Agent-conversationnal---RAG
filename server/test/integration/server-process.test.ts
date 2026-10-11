@@ -1,0 +1,272 @@
+import { afterEach, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import net from 'node:net';
+import { networkInterfaces } from 'node:os';
+import path from 'node:path';
+import { Client } from 'pg';
+import { stopEmbeddedPostgres } from '../../src/embedded-postgres';
+import { freePort, tempDir, TEST_DB_PASSWORD, TEST_DB_USER } from '../helpers/harness';
+
+// The real server process (src/index.ts), started the way `npm run dev` starts it: it runs its own
+// PostgreSQL, and has to stop it however it is stopped.
+
+const SERVER_DIR = path.resolve(__dirname, '../..');
+const WINDOWS = process.platform === 'win32';
+// Windows has no POSIX signals: Node turns Ctrl-C and closing the window into SIGINT and SIGHUP for the
+// process itself, but sending them from another process kills it outright.
+const POSIX_SIGNALS = WINDOWS ? 'Windows has no POSIX signals to send' : false;
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+interface Run {
+  child: ChildProcess;
+  output(): string;
+  exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  /** Waits until the server has printed `text`. */
+  waitFor(text: string | RegExp, timeoutMs?: number): Promise<void>;
+}
+
+describe('the server process', () => {
+  const runs: Run[] = [];
+  const folders: string[] = [];
+  const dataDirs: string[] = [];
+
+  async function setup() {
+    const root = await tempDir('sqlgen-process-test-');
+    folders.push(root);
+    const dataDir = path.join(root, 'pg');
+    dataDirs.push(dataDir);
+    return { dataDir, apiPort: await freePort(), dbPort: await freePort() };
+  }
+
+  function launch(env: Record<string, string>, { ipc = false } = {}): Run {
+    // Every setting is given, even when empty, so that a developer's server/.env changes nothing.
+    const child = spawn(process.execPath, ['--require', 'ts-node/register', 'src/index.ts'], {
+      cwd: SERVER_DIR,
+      env: {
+        ...process.env,
+        PORT: '', DB_HOST: '', DB_PORT: '', DB_NAME: '', DB_USER: TEST_DB_USER, DB_PASSWORD: TEST_DB_PASSWORD,
+        DB_READONLY_USER: '', DB_READONLY_PASSWORD: '', DB_EMBEDDED: '', DB_DATA_DIR: '',
+        OPENROUTER_API_KEY: 'test-key', LLM_BASE_URL: 'http://127.0.0.1:9/v1', LLM_MODEL: '', LLM_JSON_MODE: '',
+        ...env,
+      },
+      stdio: ipc ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout!.on('data', chunk => (output += chunk));
+    child.stderr!.on('data', chunk => (output += chunk));
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve =>
+      child.once('exit', (code, signal) => resolve({ code, signal }))
+    );
+    const run: Run = {
+      child,
+      output: () => output,
+      exited,
+      async waitFor(text, timeoutMs = 120_000) {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+          if (typeof text === 'string' ? output.includes(text) : text.test(output)) return;
+          if (child.exitCode !== null) throw new Error(`The server exited (${child.exitCode}) before printing ${text}:\n${output}`);
+          await sleep(100);
+        }
+        throw new Error(`Timed out waiting for ${text}. Output so far:\n${output}`);
+      },
+    };
+    runs.push(run);
+    return run;
+  }
+
+  const serverEnv = ({ dataDir, apiPort, dbPort }: { dataDir: string; apiPort: number; dbPort: number }) => ({
+    PORT: String(apiPort), DB_PORT: String(dbPort), DB_NAME: 'sqlgen', DB_DATA_DIR: dataDir, DB_HOST: '127.0.0.1',
+  });
+
+  async function connect(dbPort: number) {
+    const client = new Client({ host: '127.0.0.1', port: dbPort, user: TEST_DB_USER, password: TEST_DB_PASSWORD, database: 'sqlgen' });
+    await client.connect();
+    return client;
+  }
+
+  async function assertDatabaseStopped({ dataDir, dbPort }: { dataDir: string; dbPort: number }) {
+    await assert.rejects(() => connect(dbPort), { code: 'ECONNREFUSED' });
+    assert.equal(existsSync(path.join(dataDir, 'postmaster.pid')), false, 'the lock file is still there');
+  }
+
+  afterEach(async () => {
+    for (const run of runs.splice(0)) run.child.kill('SIGKILL');
+    // A database left running by a test (kill -9 cases, or a failure) must not outlive it.
+    for (const dataDir of dataDirs.splice(0)) await stopEmbeddedPostgres(dataDir).catch(() => {});
+    for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  });
+
+  it('starts the API and its own PostgreSQL', async () => {
+    const ports = await setup();
+    const run = launch(serverEnv(ports));
+
+    await run.waitFor('Server running on port');
+
+    assert.match(run.output(), /PostgreSQL started on port/);
+    const api = await fetch(`http://127.0.0.1:${ports.apiPort}/query`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(api.status, 400, 'the API answers');
+    const client = await connect(ports.dbPort);
+    try {
+      const { rows } = await client.query("SELECT to_regclass('table_schema') IS NOT NULL AS ready");
+      assert.deepEqual(rows, [{ ready: true }], 'the application tables are created');
+    } finally {
+      await client.end();
+    }
+  });
+
+  // Another address of this machine, as other computers of the network reach it.
+  const networkAddress = Object.values(networkInterfaces()).flat().find(address => address?.family === 'IPv4' && !address.internal)?.address;
+
+  it('only answers on the local machine by default', { skip: !networkAddress && 'no network address on this machine' }, async () => {
+    const ports = await setup();
+    const run = launch(serverEnv(ports));
+    await run.waitFor('Server running on port');
+
+    await assert.rejects(() => fetch(`http://${networkAddress}:${ports.apiPort}/query`, { method: 'POST' }));
+    const local = await fetch(`http://127.0.0.1:${ports.apiPort}/query`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(local.status, 400);
+  });
+
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    it(`stops the API and the database on ${signal}${signal === 'SIGHUP' ? ' (closing the terminal)' : ''}`, { skip: POSIX_SIGNALS }, async () => {
+      const ports = await setup();
+      const run = launch(serverEnv(ports));
+      await run.waitFor('Server running on port');
+
+      run.child.kill(signal);
+
+      assert.deepEqual(await run.exited, { code: 0, signal: null });
+      await assertDatabaseStopped(ports);
+      await assert.rejects(() => fetch(`http://127.0.0.1:${ports.apiPort}/`), 'the API no longer answers');
+    });
+  }
+
+  it('stops the API and the database when npm run dev asks it to (a message, which works on Windows too)', async () => {
+    const ports = await setup();
+    const run = launch(serverEnv(ports), { ipc: true });
+    await run.waitFor('Server running on port');
+
+    run.child.send('shutdown');
+
+    assert.deepEqual(await run.exited, { code: 0, signal: null });
+    await assertDatabaseStopped(ports);
+  });
+
+  it('stops the API and the database when npm run dev disappears', async () => {
+    const ports = await setup();
+    const run = launch(serverEnv(ports), { ipc: true });
+    await run.waitFor('Server running on port');
+
+    run.child.disconnect(); // what the server sees when its launcher is killed
+
+    assert.deepEqual(await run.exited, { code: 0, signal: null });
+    await assertDatabaseStopped(ports);
+  });
+
+  it('waits for the database still starting before stopping it, when asked to stop early', async () => {
+    const ports = await setup();
+    const run = launch(serverEnv(ports), { ipc: true });
+    // pg_ctl creates the log file as it starts the server, after the data folder has been created.
+    const log = path.join(ports.dataDir, 'postgres.log');
+    for (let attempt = 0; attempt < 24_000 && !existsSync(log); attempt++) await sleep(5);
+    assert.ok(existsSync(log), 'the database was starting');
+    assert.doesNotMatch(run.output(), /PostgreSQL started/);
+
+    run.child.send('shutdown');
+
+    assert.deepEqual(await run.exited, { code: 0, signal: null });
+    assert.doesNotMatch(run.output(), /Server running on port/);
+    // Nothing still on its way to start a database once the server is gone.
+    for (let check = 0; check < 10; check++) {
+      await assertDatabaseStopped(ports);
+      await sleep(500);
+    }
+  });
+
+  it('keeps the data between two runs', async () => {
+    const ports = await setup();
+    const first = launch(serverEnv(ports), { ipc: true });
+    await first.waitFor('Server running on port');
+    let client = await connect(ports.dbPort);
+    await client.query('CREATE TABLE kept (id int); INSERT INTO kept VALUES (1), (2)');
+    await client.end();
+    first.child.send('shutdown');
+    await first.exited;
+
+    const second = launch(serverEnv(ports));
+    await second.waitFor('Server running on port');
+
+    client = await connect(ports.dbPort);
+    try {
+      assert.deepEqual((await client.query('SELECT count(*)::int AS n FROM kept')).rows, [{ n: 2 }]);
+    } finally {
+      await client.end();
+    }
+  });
+
+  it('takes over a database left running by a run killed outright (kill -9, Task Manager), and stops it', async () => {
+    const ports = await setup();
+    const first = launch(serverEnv(ports));
+    await first.waitFor('Server running on port');
+    first.child.kill('SIGKILL');
+    await first.exited;
+    await (await connect(ports.dbPort)).end(); // the database outlived the server
+
+    const second = launch(serverEnv(ports), { ipc: true });
+    await second.waitFor('Server running on port');
+    assert.match(second.output(), /left running by a previous run taken over/);
+    second.child.send('shutdown');
+    await second.exited;
+
+    await assertDatabaseStopped(ports);
+  });
+
+  it('refuses to start without OPENROUTER_API_KEY, before starting any database', async () => {
+    const ports = await setup();
+    const run = launch({ ...serverEnv(ports), OPENROUTER_API_KEY: '' });
+
+    assert.deepEqual(await run.exited, { code: 1, signal: null });
+    assert.match(run.output(), /Failed to start server: OPENROUTER_API_KEY is not set/);
+    assert.match(run.output(), /openrouter\.ai\/keys/);
+    await assert.rejects(() => connect(ports.dbPort), { code: 'ECONNREFUSED' });
+    assert.equal(existsSync(ports.dataDir), false, 'no database was created');
+  });
+
+  it('refuses to start when the database port is used by another program', async () => {
+    const ports = await setup();
+    const sockets = new Set<net.Socket>();
+    const other = net.createServer(socket => { sockets.add(socket); socket.end(); });
+    await new Promise<void>(resolve => other.listen(ports.dbPort, '127.0.0.1', resolve));
+    try {
+      const run = launch(serverEnv(ports));
+
+      assert.deepEqual(await run.exited, { code: 1, signal: null });
+      assert.match(run.output(), new RegExp(`Failed to start server: Port ${ports.dbPort} is already used by another program`));
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>(resolve => other.close(() => resolve()));
+    }
+  });
+
+  it('does not leave its database running when the API port is already taken', async () => {
+    const ports = await setup();
+    const sockets = new Set<net.Socket>();
+    const other = net.createServer(socket => { sockets.add(socket); socket.end(); });
+    await new Promise<void>(resolve => other.listen(ports.apiPort, '127.0.0.1', resolve));
+    try {
+      const run = launch(serverEnv(ports));
+
+      assert.deepEqual(await run.exited, { code: 1, signal: null });
+      assert.match(run.output(), new RegExp(`Failed to start server: Port ${ports.apiPort} is already used by another program`));
+      assert.match(run.output(), /PORT/, 'tells which setting to change');
+      await assertDatabaseStopped(ports);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>(resolve => other.close(() => resolve()));
+    }
+  });
+});

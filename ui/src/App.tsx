@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:3000';
 
 // Browsers report CSV files with different MIME types (e.g. application/vnd.ms-excel on Windows),
 // so the extension is the reliable check.

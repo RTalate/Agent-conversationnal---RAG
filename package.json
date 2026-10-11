@@ -1,0 +1,25 @@
+{
+  "name": "ai-sql-query-generator",
+  "private": true,
+  "description": "Query RAG demo: ask questions about your CSV files in plain language (see README.md)",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "setup": "node scripts/project.mjs setup",
+    "dev": "node scripts/project.mjs dev",
+    "test": "node scripts/project.mjs test",
+    "test:unit": "node scripts/project.mjs test:unit",
+    "test:integration": "node scripts/project.mjs test:integration",
+    "test:ui": "node scripts/project.mjs test:ui",
+    "test:scripts": "node scripts/project.mjs test:scripts",
+    "typecheck": "node scripts/project.mjs typecheck",
+    "lint": "node scripts/project.mjs lint",
+    "build": "node scripts/project.mjs build",
+    "check": "node scripts/project.mjs check",
+    "verify": "node scripts/project.mjs verify",
+    "db:stop": "node scripts/project.mjs db:stop",
+    "db:reset": "node scripts/project.mjs db:reset",
+    "clean": "node scripts/project.mjs clean"
+  }
+}

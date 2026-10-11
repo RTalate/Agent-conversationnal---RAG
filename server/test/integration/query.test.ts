@@ -55,7 +55,7 @@ describe('POST /query', () => {
       assert.ok(h.ai.calls.length >= 5);
       for (const call of h.ai.calls) {
         assert.equal(call.temperature, 0, `${call.step} used temperature ${call.temperature}`);
-        assert.equal(call.model, 'gpt-4o-mini', call.step);
+        assert.equal(call.model, 'openai/gpt-4o-mini', call.step);
       }
     });
 

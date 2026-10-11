@@ -5,7 +5,7 @@ import App from './App'
 
 // The API is replaced by a fake fetch: these tests check what the user sees and what is sent.
 
-const API = 'http://localhost:3000'
+const API = 'http://127.0.0.1:3000'
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
