@@ -7,7 +7,8 @@ import path from "node:path";
 export class ConfigError extends Error {}
 
 export interface Config {
-  server: { port: number };
+  /** host: the address the API listens on; the local machine only by default. */
+  server: { host: string; port: number };
   db: {
     host: string;
     port: number;
@@ -64,7 +65,7 @@ export function loadConfig(env: Env): Config {
   }
 
   return {
-    server: { port: port("PORT", 3000) },
+    server: { host: text("API_HOST", "127.0.0.1"), port: port("PORT", 3000) },
     db: {
       host: text("DB_HOST", "127.0.0.1"),
       port: port("DB_PORT", 54329),

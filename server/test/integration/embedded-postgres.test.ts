@@ -1,11 +1,13 @@
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { Client } from 'pg';
-import { EmbeddedDatabaseError, startEmbeddedPostgres, type EmbeddedDatabase, type EmbeddedDatabaseOptions } from '../../src/embedded-postgres';
+import {
+  EmbeddedDatabaseError, LOG_FILE, startEmbeddedPostgres, stopEmbeddedPostgres, type EmbeddedDatabase, type EmbeddedDatabaseOptions,
+} from '../../src/embedded-postgres';
 import { freePort, tempDir, TEST_DB_PASSWORD, TEST_DB_USER } from '../helpers/harness';
 
 // The embedded PostgreSQL is what replaces Docker: these tests cover how it starts, stops and recovers.
@@ -35,7 +37,16 @@ describe('startEmbeddedPostgres', () => {
     return client;
   }
 
-  const pidOf = (options: EmbeddedDatabaseOptions) => Number(readFileSync(path.join(options.dataDir, 'postmaster.pid'), 'utf8').split('\n')[0]);
+  const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const pidOf = (options: EmbeddedDatabaseOptions) => Number(readFileSync(path.join(options.dataDir, 'postmaster.pid'), 'utf8').split('\n')[0]);
 
   async function assertNothingListens(options: EmbeddedDatabaseOptions) {
     await assert.rejects(() => connect(options), { code: 'ECONNREFUSED' });
@@ -109,6 +120,50 @@ describe('startEmbeddedPostgres', () => {
     }
   });
 
+  it('stores text as UTF-8 and compares it with Unicode case rules, even on a system set up otherwise', async () => {
+    const options = await newOptions();
+    // A system whose default is not UTF-8, like Windows and its code page (WIN1252 in Western Europe).
+    const saved = process.env.LC_ALL;
+    process.env.LC_ALL = 'C';
+    try {
+      await start(options);
+    } finally {
+      if (saved === undefined) delete process.env.LC_ALL;
+      else process.env.LC_ALL = saved;
+    }
+
+    const client = await connect(options);
+    try {
+      const { rows } = await client.query(`
+        SELECT current_setting('server_encoding') AS encoding, upper('élan çà') AS upper,
+               'Été' ILIKE 'été' AS ilike, '東京 🚀' AS text`);
+      assert.deepEqual(rows, [{ encoding: 'UTF8', upper: 'ÉLAN ÇÀ', ilike: true, text: '東京 🚀' }]);
+    } finally {
+      await client.end();
+    }
+  });
+
+  it('writes its messages to a log file in its data folder', async () => {
+    const options = await newOptions();
+    await start(options);
+
+    assert.match(readFileSync(path.join(options.dataDir, LOG_FILE), 'utf8'), /database system is ready to accept connections/);
+  });
+
+  it('starts over a first start interrupted halfway, without keeping what it left', async () => {
+    const options = await newOptions();
+    const leftover = `${options.dataDir}.initdb`;
+    mkdirSync(leftover);
+    writeFileSync(path.join(leftover, 'PG_VERSION'), '18'); // a half-created data folder
+    writeFileSync(`${options.dataDir}.password`, 'old-password\n');
+
+    await start(options);
+
+    assert.equal(existsSync(leftover), false, 'the unfinished folder is deleted');
+    assert.equal(existsSync(`${options.dataDir}.password`), false, 'no password file is left');
+    await (await connect(options)).end();
+  });
+
   it('creates the database when the server already exists without it', async () => {
     const options = await newOptions({ database: 'first' });
     const first = await start(options);
@@ -148,7 +203,9 @@ describe('startEmbeddedPostgres', () => {
       const pid = pidOf(options);
 
       process.kill(pid, 'SIGKILL');
-      await sleep(1500); // the other PostgreSQL processes notice and exit
+      // pg_ctl started it in the background: the system, not this process, collects it once dead.
+      for (let attempt = 0; attempt < 100 && isAlive(pid); attempt++) await sleep(100);
+      await sleep(1000); // the other PostgreSQL processes notice and exit
       assert.ok(existsSync(path.join(options.dataDir, 'postmaster.pid')), 'a stale lock file is left behind');
       running.length = 0;
 
@@ -161,6 +218,39 @@ describe('startEmbeddedPostgres', () => {
       } finally {
         await again.end();
       }
+    });
+  });
+
+  describe('stopEmbeddedPostgres (npm run db:stop)', () => {
+    it('stops the server running on a data folder, and says so', async () => {
+      const options = await newOptions();
+      await start(options);
+
+      assert.equal(await stopEmbeddedPostgres(options.dataDir), true);
+
+      await assertNothingListens(options);
+      assert.equal(existsSync(path.join(options.dataDir, 'postmaster.pid')), false);
+      running.length = 0;
+    });
+
+    it('does nothing when no server runs on it', async () => {
+      const options = await newOptions();
+      const database = await start(options);
+      await database.stop();
+
+      assert.equal(await stopEmbeddedPostgres(options.dataDir), false);
+      assert.equal(await stopEmbeddedPostgres(path.join(path.dirname(options.dataDir), 'never-created')), false);
+    });
+
+    it('does nothing for a lock file left by a server that is gone', async () => {
+      const options = await newOptions();
+      await start(options);
+      const pid = pidOf(options);
+      process.kill(pid, 'SIGKILL');
+      for (let attempt = 0; attempt < 100 && isAlive(pid); attempt++) await sleep(100);
+      running.length = 0;
+
+      assert.equal(await stopEmbeddedPostgres(options.dataDir), false);
     });
   });
 

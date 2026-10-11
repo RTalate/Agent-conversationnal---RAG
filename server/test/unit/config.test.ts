@@ -14,7 +14,7 @@ describe('loadConfig', () => {
     assert.equal(config.embedded.enabled, true);
     assert.ok(path.isAbsolute(config.embedded.dataDir));
     assert.match(config.embedded.dataDir, /server[\\/]\.data[\\/]postgres$/);
-    assert.equal(config.server.port, 3000);
+    assert.deepEqual(config.server, { host: '127.0.0.1', port: 3000 }, 'the API only answers on the local machine');
   });
 
   it('reaches OpenRouter by default, with a model that can be changed', () => {
@@ -27,13 +27,13 @@ describe('loadConfig', () => {
 
   it('reads every setting', () => {
     const config = loadConfig({
-      PORT: '4000', DB_HOST: 'db.internal', DB_PORT: '5432', DB_NAME: 'mydb', DB_USER: 'me', DB_PASSWORD: 'secret',
+      PORT: '4000', API_HOST: '0.0.0.0', DB_HOST: 'db.internal', DB_PORT: '5432', DB_NAME: 'mydb', DB_USER: 'me', DB_PASSWORD: 'secret',
       DB_READONLY_USER: 'reader', DB_READONLY_PASSWORD: 'readonly-secret', DB_EMBEDDED: 'false', DB_DATA_DIR: '/data/pg',
       OPENROUTER_API_KEY: 'sk-or-123', LLM_MODEL: 'anthropic/claude-sonnet-4.5', LLM_BASE_URL: 'http://gateway.internal/v1',
       LLM_JSON_MODE: 'false',
     });
 
-    assert.equal(config.server.port, 4000);
+    assert.deepEqual(config.server, { host: '0.0.0.0', port: 4000 });
     assert.deepEqual(config.db, {
       host: 'db.internal', port: 5432, name: 'mydb', user: 'me', password: 'secret',
       readOnlyUser: 'reader', readOnlyPassword: 'readonly-secret',
