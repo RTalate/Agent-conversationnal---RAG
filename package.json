@@ -3,7 +3,7 @@
   "private": true,
   "description": "Query RAG demo: ask questions about your CSV files in plain language (see README.md)",
   "engines": {
-    "node": ">=22"
+    "node": ">=18.18"
   },
   "scripts": {
     "setup": "node scripts/project.mjs setup",

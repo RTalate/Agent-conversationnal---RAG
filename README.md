@@ -12,7 +12,7 @@ Vidéo d'explication :
 [![Learn about Query RAG](https://img.youtube.com/vi/5LIfSpr3GDM/0.jpg)](https://youtu.be/5LIfSpr3GDM)
 > 🎥 How to build advanced RAG systems with AI-generated SQL
 
-**Sommaire** : [Démarrage rapide](#démarrage-rapide) · [Variantes](#variantes) · [Utiliser l'interface](#utiliser-linterface) ·
+**Sommaire** : [Démarrage rapide](#démarrage-rapide) · [Variantes](#variantes) · [Ancienne version de Node.js](#une-ancienne-version-de-nodejs) · [Utiliser l'interface](#utiliser-linterface) ·
 [Dépannage](#dépannage) · [Commandes](#commandes) · [Configuration](#configuration) ·
 [Fonctionnement](#fonctionnement) · [Sécurité](#sécurité) · [Tests](#tests)
 
@@ -28,7 +28,7 @@ PowerShell sous Windows (l'application « Terminal »), dans un terminal sous ma
 | Outil | Vérification | Installation | Désinstallation |
 |---|---|---|---|
 | Git | `git --version` | [git-scm.com](https://git-scm.com/downloads) (Windows : options par défaut) | Windows : Paramètres › Applications › Applications installées › Git › Désinstaller · macOS : `brew uninstall git` s'il vient de Homebrew ; sinon il fait partie des outils de développement Apple, retirés avec `sudo rm -rf /Library/Developer/CommandLineTools` · Linux : `sudo apt remove git` |
-| Node.js 22 ou plus récent | `node -v` affiche `v22` ou plus | [nodejs.org](https://nodejs.org/fr/download), version LTS (Windows : installateur `.msi` x64, options par défaut) | D'abord `npm cache clean --force` (vide le cache des téléchargements). Puis Windows : Paramètres › Applications › Applications installées › Node.js › Désinstaller · macOS : `sudo rm -rf /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/lib/node_modules /usr/local/include/node` · Linux : selon votre installation, `sudo apt remove nodejs` ou `nvm uninstall 22` |
+| Node.js 22 ou plus récent (18.18 au minimum : [ce que vous perdez](#une-ancienne-version-de-nodejs)) | `node -v` affiche `v22` ou plus (`v18.18` au minimum) | [nodejs.org](https://nodejs.org/fr/download), version LTS (Windows : installateur `.msi` x64, options par défaut) | D'abord `npm cache clean --force` (vide le cache des téléchargements). Puis Windows : Paramètres › Applications › Applications installées › Node.js › Désinstaller · macOS : `sudo rm -rf /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/lib/node_modules /usr/local/include/node` · Linux : selon votre installation, `sudo apt remove nodejs` ou `nvm uninstall 22` |
 | **Windows uniquement** : Microsoft Visual C++ Redistributable (x64), utilisé par PostgreSQL | Paramètres › Applications › Applications installées : « Microsoft Visual C++ … Redistributable (x64) » | [vc_redist.x64.exe](https://aka.ms/vs/17/release/vc_redist.x64.exe) (sans danger s'il est déjà installé) | Paramètres › Applications › Applications installées › Microsoft Visual C++ … Redistributable (x64) › Désinstaller. **Dans le doute, gardez-le** : beaucoup de logiciels s'en servent |
 | Une clé API OpenRouter **avec du crédit** | — | [openrouter.ai/keys](https://openrouter.ai/keys) | Supprimez la clé sur la même page |
 | Ce projet : le code, ses dépendances, le moteur PostgreSQL et vos données | — | Étapes 1 à 3 ci-dessous | Arrêtez l'application (Ctrl-C), puis supprimez le dossier du projet. Rien d'autre n'est installé sur la machine : ni service, ni programme global |
@@ -46,8 +46,13 @@ Chaque import de CSV et chaque question appellent le modèle d'IA, via OpenRoute
 - **Si `npm` répond « l'exécution de scripts est désactivée sur ce système »**, autorisez-les une fois pour votre compte :
   `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` (ou tapez `npm.cmd` au lieu de `npm`).
 - **PC à processeur ARM** (Snapdragon, par exemple) : il n'existe pas de PostgreSQL embarqué pour eux ; utilisez
-  [votre propre PostgreSQL](#votre-propre-postgresql). Pour le savoir : Paramètres › Système › Informations système ›
-  « Type du système ».
+  [votre propre PostgreSQL](#votre-propre-postgresql). Pour savoir si c'est votre cas, au choix :
+  - **Paramètres** › **Système**, puis le dernier élément du menu, appelé « À propos de » ou « Informations système »
+    selon la version et la langue de Windows. La ligne **Type du système** indique « processeur x64 » ou « processeur
+    ARM ».
+  - Dans PowerShell : `(Get-CimInstance Win32_Processor).Architecture`. `9` : x64, le PostgreSQL embarqué convient.
+    `12` : ARM64, il faut votre propre PostgreSQL.
+  - Pas `node -p "process.arch"` : un Node.js x64 installé sur un PC ARM affiche aussi `x64`.
 
 Sous macOS et Linux, utilisez votre compte habituel, **pas root** : PostgreSQL refuse de tourner en root.
 
@@ -149,6 +154,27 @@ DB_HOST=...      # puis DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 La base `DB_NAME` doit exister. C'est la solution sur un PC Windows à processeur ARM, ou pour lancer l'application en root
 (conteneur, serveur partagé) sans utilisateur système `postgres`.
 
+### Une ancienne version de Node.js
+
+L'application tourne dès **Node.js 18.18** (version minimale des outils du projet : Vite, Vitest, ESLint, SDK OpenAI).
+Elle a été essayée de bout en bout avec Node.js 18.18.0 et 19.8.1 : lancement, import d'un CSV, question, arrêt.
+Avec une version antérieure à 22, vous **perdez** uniquement les tests :
+
+| Commande | Node.js 22 ou plus | Node.js 18.18 à 21 |
+|---|---|---|
+| `npm run dev` (l'application) | oui | oui |
+| `npm run build`, `typecheck`, `lint`, `check` | oui | oui |
+| `npm run test:ui` (tests de l'interface) | oui | oui |
+| `npm run db:stop`, `db:reset`, `setup`, `clean` | oui | oui |
+| `npm test`, `test:unit`, `test:integration`, `test:scripts`, `npm run verify` | oui | **non** : la commande s'arrête avec un message qui l'explique |
+
+Pourquoi les tests exigent Node.js 22 : le lanceur de tests des versions plus anciennes n'a pas l'option `--test-timeout`,
+ne développe pas les motifs de fichiers (`*.test.ts`) et n'exécute qu'une fois le `beforeEach` d'un `describe` parent pour
+un `describe` imbriqué, ce qui fait échouer `query.test.ts` et `upload.test.ts`. Rien de cela ne touche l'application.
+
+Vite 5 et ESLint 9 ne déclarent pas Node.js 19 : npm affiche des avertissements `EBADENGINE` à l'installation avec cette
+version. Ce sont des avertissements, pas des erreurs ; préférez Node.js 18.18 ou 20 si vous avez le choix.
+
 ---
 
 ## Utiliser l'interface
@@ -180,7 +206,8 @@ ligne. Les lignes `[api]` viennent de l'API, les lignes `[ui]` de l'interface.
 |---|---|---|
 | `git`, `node` ou `npm` « n'est pas reconnu » / `command not found` | L'outil n'est pas installé, ou le terminal a été ouvert avant son installation | Installez-le ([étape 0](#0-ce-quil-faut-avoir)), puis ouvrez un nouveau terminal |
 | `npm` : « l'exécution de scripts est désactivée sur ce système » (Windows) | PowerShell bloque les scripts par défaut | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, ou tapez `npm.cmd` au lieu de `npm` |
-| `Node.js 22 or later is needed` | Node.js est trop ancien | Installez la version LTS depuis [nodejs.org](https://nodejs.org/fr/download) |
+| `Node.js 18.18 or later is needed` | Node.js est trop ancien pour l'application | Installez la version LTS depuis [nodejs.org](https://nodejs.org/fr/download) |
+| `npm run … needs Node.js 22 or later` | Une commande de test lancée avec Node.js 18.18 à 21 | Installez Node.js 22 pour les tests, ou voir [ce qui reste disponible](#une-ancienne-version-de-nodejs) |
 | `server/.env is missing` | Le fichier de configuration n'existe pas | `cp server/.env.sample server/.env` ([étape 2](#2-renseigner-votre-clé-openrouter)) |
 | `Failed to start server: OPENROUTER_API_KEY is not set` | La clé est vide ou absente de `server/.env` | Renseignez-la (étape 2) et relancez. `OPENAI_API_KEY` n'est plus lue |
 | `the Microsoft Visual C++ Redistributable (x64) is missing` (Windows), parfois précédé d'une fenêtre « VCRUNTIME140.dll introuvable » | Un composant Windows dont PostgreSQL a besoin manque | Installez [vc_redist.x64.exe](https://aka.ms/vs/17/release/vc_redist.x64.exe) et relancez |
@@ -321,6 +348,8 @@ confiance. Changez les identifiants par défaut de la base (`postgres` / `admin`
 | `npm run test:integration` | Serveur, les vraies routes, le SQL et le pipeline : imports et injection SQL, garde en lecture seule, rôle dédié, appels au fournisseur d'IA, cycle de vie de la base, processus serveur, `db:stop` et `db:reset` |
 | `npm run test:ui` | Interface : tests de composants (Vitest et Testing Library, avec l'API remplacée par un faux `fetch`) |
 | `npm run test:scripts` | `npm run dev` lui-même : ordre de démarrage, arrêt de l'ensemble (Ctrl-C, fermeture, échec de l'une des parties) |
+
+Les tests exigent Node.js 22 ou plus récent ([détails](#une-ancienne-version-de-nodejs)).
 
 Les tests n'appellent jamais OpenRouter : l'application parle à un faux local (`server/test/helpers/fake-openai.ts`), donc
 pas de clé ni de coût. Chaque fichier de test lance **son propre PostgreSQL** (le même que celui de l'application), sur un
