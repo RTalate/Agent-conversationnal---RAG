@@ -12,7 +12,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SERVER = path.join(ROOT, 'server');
 const UI = path.join(ROOT, 'ui');
 const WINDOWS = process.platform === 'win32';
-const NODE_MAJOR = 22;
+// Node.js 18.18 is the oldest version the tools of the project support (Vite, Vitest, ESLint, the OpenAI SDK).
+// The test suites need 22: before it, the test runner has no --test-timeout, does not expand file patterns, and
+// runs the beforeEach hooks of a parent describe() only once for a nested one.
+const NODE_MINIMUM = [18, 18];
+const NODE_FOR_TESTS = 22;
 
 class CommandError extends Error {}
 
@@ -201,6 +205,9 @@ async function dev() {
 
 // --- Commands --------------------------------------------------------------------------------------------
 
+// Commands that need Node.js 22 (see NODE_FOR_TESTS); the others run from NODE_MINIMUM.
+const NEEDS_NODE_FOR_TESTS = ['test', 'test:unit', 'test:integration', 'test:scripts', 'verify'];
+
 const COMMANDS = {
   setup: ['Install (again) the dependencies of the server and of the interface', () => install([SERVER, UI], { always: true })],
   dev: ['Start the API (3000), its database and the interface (5173); Ctrl-C stops everything', dev],
@@ -220,12 +227,22 @@ const COMMANDS = {
 };
 
 function usage() {
-  return Object.entries(COMMANDS).map(([name, [description]]) => `  npm run ${name.padEnd(17)} ${description}`).join('\n');
+  return Object.entries(COMMANDS)
+    .map(([name, [description]]) => `  npm run ${name.padEnd(17)} ${description}${NEEDS_NODE_FOR_TESTS.includes(name) ? ` (needs Node.js ${NODE_FOR_TESTS})` : ''}`)
+    .join('\n');
 }
 
 async function main(name) {
-  if (Number(process.versions.node.split('.')[0]) < NODE_MAJOR) {
-    throw new CommandError(`Node.js ${NODE_MAJOR} or later is needed (this is ${process.version}). Install it from https://nodejs.org`);
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (major < NODE_MINIMUM[0] || (major === NODE_MINIMUM[0] && minor < NODE_MINIMUM[1])) {
+    throw new CommandError(`Node.js ${NODE_MINIMUM.join('.')} or later is needed (this is ${process.version}). Install it from https://nodejs.org`);
+  }
+  if (major < NODE_FOR_TESTS && NEEDS_NODE_FOR_TESTS.includes(name)) {
+    throw new CommandError(
+      `npm run ${name} needs Node.js ${NODE_FOR_TESTS} or later (this is ${process.version}): the test runner of older versions cannot run the test suites.\n` +
+        'Still available with this version: dev, build, typecheck, lint, check, test:ui, setup, db:stop, db:reset, clean.\n' +
+        'Install Node.js 22 from https://nodejs.org to run the whole test suite.'
+    );
   }
   const command = COMMANDS[name];
   if (!command) {
